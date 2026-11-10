@@ -2,7 +2,7 @@
 
 **Project:** `mastra-nipp-agent`
 **Date:** 2026-11-10
-**Status:** Phase 2 complete — executing Phase 3 next
+**Status:** Phase 3 complete — executing Phase 4 next
 **Companion doc:** [`DESIGN.md`](./DESIGN.md) — architecture, auth design, security model
 **Ground truth:** [`domain-mapping.json`](./domain-mapping.json) — all 177 MCP tool IDs mapped to the 15 domain tools. Generated from a live `tools/list` call on 2026-11-10; regenerate and re-verify with `python3 scripts/check-mapping-coverage.py` (probes the live server, exits non-zero on drift) after any portal spec change, before Phase 5.
 
@@ -188,12 +188,28 @@ any of the 15 domain tools.
 
 ### Acceptance criteria
 
-- [ ] Request **with** a valid portal session cookie → authenticated (user id resolvable)
-- [ ] Request **without** cookie → 401
-- [ ] A banned user's cookie → rejected by `authorizeUser`
+- [x] Request **with** a valid portal session cookie → authenticated (user id resolvable)
+- [x] Request **without** cookie → 401
+- [x] A banned user's cookie → rejected by `authorizeUser`
 - [ ] Secret mismatch between agent and portal `.env` is caught (test in Phase 7)
 
 **Commit checkpoint:** `feat: betterauth shared-session verification (phase 3)`
+
+> **Phase 3 notes (2026-11-10):** Verified live with a real portal sign-in at
+> `:3000`: no cookie → 401 on `/api/mastra/agents` and the agent stream; valid
+> cookie → 200, and `mapUserToResourceId` resolved the user id (visible as the
+> memory resourceId in the stream request). Ban check proven by flipping the
+> admin's `banned` flag: banned → rejected (403), unbanned → 200 again. Three
+> deltas vs. DESIGN §5.5.3: (1) BetterAuth's `getSession()` returns only the
+> base user shape — the custom `banned`/`banExpires` columns are not on it, so
+> `authorizeUser` re-reads the live User row via `agentPrisma` (fail-closed on
+> DB error); (2) Prisma 7 requires a driver adapter — the client connects
+> through `@prisma/adapter-pg` exactly like the portal; (3) the generated
+> client is ESM TS at `prisma/generated/prisma/client`, imported via the
+> `@prisma-gen/*` alias (tsconfig + vitest). The Prisma schema is a verbatim
+> copy of `nipp-0111/prisma/schema.prisma`; regenerate after portal schema
+> changes (`npx prisma generate`). Secret-mismatch detection stays in Phase 7's
+> `auth.test.ts`.
 
 ---
 

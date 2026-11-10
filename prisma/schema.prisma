@@ -1,0 +1,971 @@
+// ============================================================
+// TENANT ISOLATION REQUIREMENT
+// ============================================================
+// Every organization-scoped model MUST include:
+//
+//   organizationId String
+//   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+//   @@index([organizationId])
+//
+// (BetterAuth-owned models: Member/Invitation use `organizationId` on 1.7; SentInvitation — app-internal — keeps `orgId`.)
+// This is required for BOTH isolation layers:
+//   1. App layer: tenantDb extension (lib/tenant-db.ts / lib/tenant-extension-core.ts)
+//      injects the org column into where/data — its model list must match this
+//      requirement exactly (drift-guarded by tests/unit/tenant-db-hardening.test.ts).
+//   2. DB layer: PostgreSQL RLS policies (prisma/migrations/…_rls_complete_policies)
+//      keyed on the same column; policy catalog drift is hash-checked in CI
+//      (tests/isolation/database/policy-catalog.golden).
+//
+// Without an org column, tenant isolation is BROKEN for that model.
+//
+// EXEMPT models (global — no org column by design, documented in SECURITY.md
+// Appendix B / documents/rls-complete-implementation.md §3.3):
+//   User, Session, Account        BetterAuth auth models (no tenant data)
+//   Permission                    global catalog; read restricted to platform org
+//                                 OR permissions assigned to the ctx org's roles
+//   Resource, ResourceRole        global feature catalog; the sensitive side sits
+//                                 on org-scoped Role rows which ARE policied.
+//                                 Re-evaluate before any route queries these directly.
+//   Contractors                   global shared directory of external contractors
+//                                 usable by ALL organizations; no org column by
+//                                 design (RLS-exempt — SECURITY.md Appendix B).
+//                                 Do NOT add an org column or RLS policy without
+//                                 a proposal.
+//   JobDefinition, JobExecution   platform-only by strongest stance: policies gate
+//                                 on app.is_platform_admin AND app.platform_org_id =
+//                                 the row's platformOrgId (no tenant-context path).
+//   Organization, AuditLog, NotificationLog, Notification  RLS-only tables with
+//                                 richer per-command/NULL-org visibility rules —
+//                                 policies exist; they have no single-column app
+//                                 layer injection.
+// ============================================================
+
+// Prisma 7: the `prisma-client` provider REQUIRES an explicit `output`.
+// The generated ESM client lives in ./generated/prisma (git-ignored — run
+// `npx prisma generate`; CI does so before type-check/build). All app code
+// imports it through the lib/prisma.ts re-export barrel.
+generator client {
+  provider = "prisma-client"
+  output   = "./generated/prisma"
+}
+
+// Prisma 7: the CLI connection URL lives in prisma.config.ts (datasource.url),
+// not in the schema — an `url` field here is no longer accepted.
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+/** Organization lifecycle states */
+enum OrgStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+/** Notification delivery status */
+enum NotificationStatus {
+  SENT
+  FAILED
+}
+
+/** Calendar event types */
+enum CalendarEventType {
+  VIEWING
+  INSPECTION
+  MAINTENANCE
+  LEASE_SIGNING
+  LEASE_RENEWAL
+  KEY_EXCHANGE
+  OTHER
+}
+
+/** Recurrence frequency for recurring calendar events (used by frontend/display helpers). */
+enum CalendarRecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  SEMI_ANNUALLY
+  ANNUALLY
+}
+
+/** Property (unit) types — the kind of property a managed unit is. */
+enum UnitType {
+  HOUSE
+  APARTMENT
+  OTHER
+}
+
+/** Notification scope — who receives the notification */
+enum NotificationScope {
+  GLOBAL
+  ORG
+}
+
+/**
+ * Notification priority levels.
+ *
+ * CALENDAR is the priority for "event due to start" SSE notifications emitted
+ * by lib/calendar-event-scheduler.ts. It behaves like CRITICAL in the ticker:
+ * it persists until the user dismisses it manually (it does NOT auto-dismiss
+ * like INFO/WARNING). It is rendered in bright green to distinguish upcoming
+ * calendar reminders from operational alerts.
+ */
+enum NotificationPriority {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+  CALENDAR
+  JOB
+}
+
+/** Contractor business types — global directory shared by all organizations. */
+enum ContractorType {
+  PAINTER
+  ELECTRICIAN
+  PLUMBER
+  GAS_ENGINEER
+  LIFT_MAINTENANCE
+  GARDENER
+  ACCOUNTANT
+  FIRE_ALARMS
+  SOLICITOR
+  ROOFER
+  WINDOW_CLEANER
+  OTHER
+}
+
+// ============================================================
+// Authentication Models (BetterAuth — global, not org-scoped)
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  passwordHash  String?
+  role          String    @default("member")
+  banned        Boolean?  @default(false)
+  banReason     String?
+  banExpires    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  activeOrganizationId  String?   @map("activeOrganizationId")
+  // Design §4.3: true only when the user completes magic-link verification.
+  // emailVerified is asserted by Google on sign-up and CANNOT be used for this.
+  oidcVerified          Boolean   @default(false)
+
+  sessions Session[]
+  accounts Account[]
+  members  Member[]
+  teamMembers TeamMember[] // User can be a member of multiple teams
+}
+
+model Session {
+  id           String    @id @default(cuid())
+  expiresAt    DateTime
+  token        String    @unique
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  ipAddress    String?
+  userAgent    String?
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Better Auth 1.7 per-session org/team tracking — the organization plugin
+  // writes these via setActiveOrganization/setActiveTeam at every org switch.
+  activeOrganizationId  String?
+  activeTeamId          String?
+
+  @@index([userId])
+}
+
+model Account {
+  id                String    @id @default(cuid())
+  // NOTE: field names MUST match BetterAuth's canonical account schema — the
+  // prisma adapter passes them through verbatim (providerId + accountId where
+  // accountId = provider-specific sub, accessToken/idToken/… camelCase). Do not
+  // rename without re-pointing better-auth/adapters/prisma.
+  accountId         String
+  providerId        String
+  password          String?
+  refreshTokenExpiresAt DateTime?
+  idToken           String?
+  scope             String?
+  tokenType         String?
+  sessionState      String?
+  accessToken     String?
+  accessTokenExpiresAt DateTime?
+  refreshToken    String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  userId   String
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+// BetterAuth verification records (email verifications, OAuth state storage).
+// Required by the social-provider sign-in flow (OAuth PKCE state + nonce).
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+// ============================================================
+// Multi-Tenancy Models (BetterAuth Organization Plugin)
+// These are global — not org-scoped.
+// ============================================================
+
+model Organization {
+  id          String   @id @default(cuid())
+  slug        String?  @unique
+  name        String
+  description String?
+  status      OrgStatus @default(PENDING)
+  metadata    Json?
+  // Better Auth 1.7 org logo (not surfaced by app UI; the adapter writes it).
+  logo        String?
+  // Map coordinates + zoom for the organization's Map page (NOT exposed in the org
+  // CRUD/view dialogs — read via GET /api/organizations/[orgId]/location). Zoom is
+  // clamped to [MIN_ZOOM, MAX_ZOOM] when applied; e.g. 9 renders as "34%" with the
+  // current display-percent formula.
+  latitude    Float?
+  longitude   Float?
+  mapZoom     Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members            Member[]
+  invitations        Invitation[]
+  sentInvitations    SentInvitation[]
+  memberRoles        MemberRole[]
+  auditLogs          AuditLog[]
+  notificationLogs   NotificationLog[]
+  notifications      Notification[]
+  // RBAC: roles and role-permission mappings scoped to this organization
+  roles              Role[]
+  rolePermissions    RolePermission[]
+  // Teams: sub-organizational groupings with role inheritance
+  teams              Team[]
+  teamMembers        TeamMember[] // Organization-scoped team memberships
+  teamRoles          TeamRole[]   // Organization-scoped team-role assignments
+  // Calendars: organization-scoped calendar containers and events
+  calendars          Calendar[]
+  calendarEvents     CalendarEvent[]
+  // Units: the properties managed by this organization (1:M)
+  units              Units[]
+  // Work Orders: work tracked from request through paid (1:M)
+  workOrders         WorkOrder[]
+  workOrderNotes     WorkOrderNote[]
+  quotations         Quotation[]
+  invoices           Invoice[]
+}
+
+model Member {
+  id         String   @id @default(cuid())
+  role       String   @default("member")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Better Auth 1.7 renamed `orgId` -> `organizationId` in the org plugin's
+  // member table; the adapter requires this exact column name to pass its
+  // runtime schema check.
+  organizationId String
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberRoles MemberRole[]
+
+  // Optional team association (BetterAuth internal alignment when teams are enabled)
+  teamId     String?  @map("teamId")
+
+  @@unique([userId, organizationId])
+}
+
+model Invitation {
+  id         String   @id @default(cuid())
+  email      String
+  role       String?
+  // Better Auth 1.7 invitation columns (renamed orgId -> organizationId, token removed):
+  // the plugin's create writes status='pending' + inviterId; existing 1.6 rows are
+  // backfilled by migration (status defaulted pending, inviter left null).
+  organizationId String
+  status       String   @default("pending")
+  inviterId    String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Optional team association — invites users directly to a specific team.
+  // NOTE: 1.7 stores team ids as a comma-joined string here; single-team
+  // invites keep writing one id, so existing rows remain readable.
+  teamId     String?  @map("teamId")
+
+  @@index([email])
+}
+
+// ============================================================
+// Teams Models (BetterAuth Organization Plugin — Teams Mode)
+// These are organization-scoped for tenant isolation.
+// ============================================================
+
+/**
+ * Team — Functional grouping within an organization.
+ * Teams allow users to be organized into sub-organizational units
+ * (e.g., "Maintenance Team A", "Letting Agents") with role inheritance.
+ */
+model Team {
+  id          String   @id @default(cuid())
+  name        String   // Human-readable team name (max 100 chars)
+  slug        String?  // URL-friendly identifier (auto-generated from name if not provided)
+  description String?  // Optional team description (max 500 chars)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Better Auth 1.7 team seat counter — the plugin reserves seats atomically
+  // via incrementOne guarded by memberCount < maximumMembersPerTeam.
+  memberCount  Int      @default(0)
+
+  members TeamMember[]
+  roles  TeamRole[]
+
+  @@unique([organizationId, slug]) // Slug is unique per organization
+  @@index([organizationId, name]) // B-tree index for efficient org-scoped team lookups
+  @@index([slug])                 // Index for unique slug resolution
+}
+
+/**
+ * TeamMember — User-to-team membership within an organization.
+ * A user can be a member of multiple teams within the same org.
+ */
+model TeamMember {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 1.7: org is derived from the team; the plugin never writes this column,
+  // so it must be nullable for its insert to pass the schema check.
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  // Better Auth 1.7 canonical membership key:
+  // base64url(SHA-256(JSON.stringify([teamId, userId]))) without padding.
+  membershipKey String  @unique
+
+  @@unique([userId, teamId]) // A user can only be in a team once
+  @@index([organizationId])  // Index for tenant-scoped queries
+  @@index([teamId])          // Index for team member lookups
+}
+
+/**
+ * TeamRole — Junction table linking teams to organization-scoped roles.
+ * Enables automatic role inheritance: when a user joins a team,
+ * all roles associated with that team are automatically assigned.
+ */
+model TeamRole {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  teamId     String
+  team       Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, roleId]) // A role can only be assigned once per team
+  @@index([organizationId])  // Index for tenant-scoped queries
+}
+
+// SentInvitation (BetterAuth internal model for tracking sent invitations)
+model SentInvitation {
+  id         String   @id @default(cuid())
+  email      String
+  role       String?
+  token      String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  orgId      String
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([email])
+}
+
+// ============================================================
+// RBAC Models (Authorization & Role-Based Access Control)
+// ============================================================
+
+/**
+ * Permission — Global master catalog of all available permissions.
+ * Uses resource:action syntax (e.g., properties:view, tenants:create).
+ * Global because the permission catalog is shared across all organizations.
+ */
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g., "properties:view"
+  resource    String   // e.g., "properties"
+  action      String   // e.g., "view"
+  description String?
+  isDefault   Boolean  @default(true) // true = bootstrapped, false = custom
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles       RolePermission[]
+}
+
+/**
+ * Role — Organization-scoped role definition.
+ * Roles can be default (bootstrapped) or custom (created by Org Admins).
+ */
+model Role {
+  id          String   @id @default(cuid())
+  name        String   // e.g., "Property Manager", "Custom Viewer"
+  description String?
+  isDefault   Boolean  @default(false) // true = bootstrapped, false = custom
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  permissions        RolePermission[]
+  memberRoles        MemberRole[]
+  teamRoles          TeamRole[]   // Roles assigned to teams for inheritance
+  // Resource access control — global junction table back-reference
+  resources          ResourceRole[]
+
+  @@index([name]) // B-tree index for prefix search (search-autocomplete)
+}
+
+/**
+ * RolePermission — Junction table mapping roles to permissions.
+ * Org-scoped for tenant isolation (redundant with Role.organizationId but required by schema rules).
+ */
+model RolePermission {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  permissionId String
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: NoAction)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([organizationId])
+}
+
+/**
+ * MemberRole — Junction table linking members to their assigned roles.
+ * Fixes pre-existing bug: this table was referenced in code (org-bootstrap.ts)
+ * but missing from the schema. Org-scoped for tenant isolation.
+ */
+model MemberRole {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  memberId   String
+  member     Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, roleId])
+  @@index([organizationId])
+}
+
+
+/**
+ * AuditLog — Records security-relevant admin actions for all organizations.
+ * Global model (not org-scoped) so Super Admins can query across tenants.
+ */
+model AuditLog {
+  id             String       @id @default(cuid())
+  timestamp      DateTime     @default(now())
+  userId         String?
+  userName       String?
+  action         String       // e.g., "organization.created", "role.deleted"
+  resourceType   String       // e.g., "Organization", "Role", "Permission"
+  resourceId     String?
+  organizationId String?
+  ipAddress      String?
+  userAgent      String?
+  success        Boolean      @default(true)
+  metadata       Json?
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([organizationId])
+  @@index([timestamp])
+  @@index([resourceType])
+}
+
+/**
+ * NotificationLog — Tracks email notifications sent by the notification system.
+ */
+model NotificationLog {
+  id               String         @id @default(cuid())
+  timestamp        DateTime       @default(now())
+  recipientEmail   String
+  eventType        String
+  message          String?
+  status           NotificationStatus @default(SENT)
+  organizationId   String?
+
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([timestamp])
+}
+
+// ============================================================
+// Notification Models (In-app notifications — org-scoped + global)
+// ============================================================
+
+/**
+ * Notification — In-app events surfaced via SSE stream + notification log.
+ *
+ * Scope semantics (see lib/notification-push.ts, pushNotification):
+ *   - GLOBAL: broadcast to ALL connected subscribers (super admins and every
+ *     tenant). organizationId is intentionally NULL for pure broadcasts, but
+ *     an ADMIN global broadcast sent on behalf of an org (source
+ *     "admin:message") may carry that org's id so the log can display which
+ *     organization initiated it.
+ *   - ORG: delivered only to subscribers of that organization plus super
+ *     admins (whose subscriber orgId is NULL).
+ *
+ * Super admins can view every notification regardless of scope — scope gates
+ * live SSE delivery, not historical visibility in the admin log.
+ */
+model Notification {
+  id             String   @id @default(cuid())
+  title          String
+  message        String
+  priority       NotificationPriority @default(INFO)
+  scope          NotificationScope @default(ORG) // ORG = tenant-specific, GLOBAL = broadcast to all
+  source         String?  // e.g., "health-check:database", "admin:message", "platform:certs"
+
+  /** Organization this notification belongs to (null for global broadcasts) */
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  /** Whether this notification has been acknowledged by an admin */
+  acknowledged   Boolean  @default(false)
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@index([scope, createdAt]) // For admin log listing (global notification queries)
+}
+
+// ============================================================
+// Resource Data Model (Global — not org-scoped)
+// ============================================================
+
+/**
+ * Resource — Global catalog of portal feature modules.
+ * Resources represent feature areas (e.g., "Maintenance Requests", "Work Orders")
+ * and are linked to org-scoped roles via the ResourceRole junction table.
+ */
+model Resource {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  resourceRoles ResourceRole[]
+}
+
+/**
+ * ResourceRole — Global junction table linking Resources to org-scoped Roles.
+ * Enables feature-level access control: a role must be assigned to a resource
+ * for users with that role to access the feature.
+ */
+model ResourceRole {
+  id         String   @id @default(cuid())
+  createdAt  DateTime @default(now())
+
+  resourceId String
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  roleId     String
+  role       Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, roleId]) // A role can only be assigned once per resource
+}
+
+// ============================================================
+// Calendar Models (Interactive Calendar — org-scoped)
+// ============================================================
+
+/**
+ * Calendar — Container/namespace for events within an organization.
+ * Each org gets one default calendar at bootstrap. Supports multiple calendars
+ * per org for future extensibility (e.g., "Maintenance Calendar", "Lettings Calendar").
+ */
+model Calendar {
+  id          String   @id @default(cuid())
+  name        String   // Human-readable calendar name
+  description String?
+  color       String   @default("#1B2A4A") // Default color theme
+  isDefault   Boolean  @default(false) // Exactly one default calendar per org
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  events CalendarEvent[]
+
+  @@unique([organizationId, name]) // Prevent duplicate names within an org
+  @@index([organizationId])
+}
+
+/**
+ * CalendarEvent — Individual events within a calendar.
+ * Supports single-day, multi-day, and recurring events via rrule JSON.
+ */
+model CalendarEvent {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  startDate   DateTime // Local datetime (no timezone for v1)
+  endDate     DateTime // Local datetime (no timezone for v1)
+
+  /** True when the event occupies whole days with no time-of-day.
+   *  When true, startDate is local midnight of the first day and
+   *  endDate is 23:59:59.999 of the last day (inclusive). */
+  allDay      Boolean  @default(false)
+
+  eventType   CalendarEventType @default(OTHER)
+  color       String?  // Event-level override of calendar default color
+
+  calendarId String
+  calendar   Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  /** RFC 5545 recurrence rule stored as JSON (rrule format). */
+  rrule        Json?
+  /** Excluded dates from expansion (YYYY-MM-DD strings). */
+  exdates      Json @default("[]") @db.Json
+
+  propertyId String? // Optional property association (nullable for general events)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([organizationId, startDate]) // Efficient date range queries
+  @@index([propertyId])                 // Property-based event lookups (future scheduler)
+}
+
+// ============================================================
+// Units Models (Properties — org-scoped)
+// ============================================================
+
+/**
+ * Units — A property managed by an organization (1:M from Organization).
+ * Org column `organizationId` is the RLS policy column and the app-layer
+ * scoping column (TENANT_SCOPED_MODELS); policy rls_units_isolated is keyed
+ * on it (prisma/migrations/…_units_rls_policy).
+ */
+model Units {
+  unitId      String   @id @default(cuid()) // Auto-generated primary key
+  organizationId     String
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  owner       String   // Name of the unit owner
+  address     String   // Street address of the unit
+  postCode    String   // Post code of the unit
+  email       String   // Contact email address of the unit owner
+  phone       String   // Contact phone number of the unit owner
+  rented      Boolean  @default(false) // Is the property rented out?
+  type        UnitType @default(APARTMENT)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([organizationId]) // Tenant-scoped queries (RLS + app-layer scoping)
+}
+
+// ============================================================
+// Work Order Flow Models (org-scoped)
+// Design: documents/feature-planning-and-development/work-order-flow.md
+// ============================================================
+
+/** Work order lifecycle. CLOSED = early closure pre-assignment (no funding etc.). */
+enum WorkOrderState {
+  CREATED
+  OUT_FOR_QUOTES
+  QUOTES_IN
+  CONTRACTOR_ASSIGNED
+  STARTED
+  COMPLETE
+  INVOICED
+  FINISHED
+  CLOSED
+}
+
+/** Quotation lifecycle within a work order. */
+enum QuotationState {
+  OPENED
+  ACCEPTED
+  REJECTED
+  CLOSED
+}
+
+model WorkOrder {
+  workOrderId    String         @id @default(cuid())
+  description    String
+  /** Email of the person/super admin who opened the work order (brief requirement). */
+  openedBy       String
+  /** User.id of the opener for actor integrity (nullable — super admins may open on behalf of orgs). */
+  openedById     String?
+  /** FK to Contractors; null until CONTRACTOR_ASSIGNED. */
+  contractorId   String?
+  /** Set when RFQ is sent; default deadline +7 days, configurable at send time. */
+  quotesDue      DateTime?
+  /** Set when the overdue alert fired (idempotency for the deadline job). */
+  deadlineAlertAt DateTime?
+  state          WorkOrderState @default(CREATED)
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  contractor Contractors? @relation(fields: [contractorId], references: [contractorId])
+
+  notes   WorkOrderNote[]
+  quotes  Quotation[]
+  invoice Invoice?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, state])
+  @@index([organizationId, quotesDue])
+}
+
+model WorkOrderNote {
+  workOrderNoteId String  @id @default(cuid())
+  workOrderId     String
+  note            String
+  /** Super admin user id who wrote the note (notes are super-admin managed). */
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  workOrder WorkOrder @relation(fields: [workOrderId], references: [workOrderId], onDelete: Cascade)
+
+  @@index([workOrderId])
+}
+
+model Quotation {
+  quoteId      String         @id @default(cuid())
+  workOrderId  String
+  contractorId String
+  /** Remote file link to the quotation, null until received. */
+  quoteLink    String?
+  /** Breakdown of the quote; null until received. */
+  description  String?
+  /** Quoted amount; null until received (filling it auto-moves the work order to QUOTES_IN). */
+  price        Decimal?       @db.Decimal(12, 2)
+  dueDate      DateTime
+  state        QuotationState @default(OPENED)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  workOrder  WorkOrder   @relation(fields: [workOrderId], references: [workOrderId], onDelete: Cascade)
+  contractor Contractors @relation(fields: [contractorId], references: [contractorId])
+
+  @@unique([workOrderId, contractorId])
+  @@index([organizationId])
+}
+
+model Invoice {
+  invoiceId    String   @id @default(cuid())
+  invoiceDate  DateTime
+  /** 1:1 with WorkOrder. */
+  workOrderId  String   @unique
+  contractorId String
+  invoiceLink  String?
+  price        Decimal  @db.Decimal(12, 2)
+  dueDate      DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  workOrder  WorkOrder   @relation(fields: [workOrderId], references: [workOrderId])
+  contractor Contractors @relation(fields: [contractorId], references: [contractorId])
+
+  @@index([organizationId])
+}
+
+// ============================================================
+// Background Job Scheduler (job-scheduler-service)
+// Platform-organization only. A job run forks a Bree worker; operator code
+// (Phase 2) is stored in `code` and materialized to a tmp file at exec time
+// (file-based worker — never eval'd).
+// ============================================================
+
+model JobDefinition {
+  id             String  @id @default(cuid())
+  /** Owner = the platform organization only. */
+  platformOrgId  String
+
+  /** Unique within a platformOrgId. */
+  name           String
+  /** Free-text description of what the script does. */
+  description    String?
+  /** Handler registry key → built-in handler or (Phase 2) stored script. */
+  handlerKey     String
+  /**
+   * Operator/script source (Phase 2). Materialized to a tmp file under
+   * job-scheduler-runtime/ at execution time and loaded into the Bree worker
+   * by file path — never stringified/eval'd. Null for built-in handlers.
+  */
+  code           String?
+  /** Schedule: JSON — { 'kind': 'cron'|'interval'|'oneshot', ... }. */
+  scheduleExpr   String
+  /** IANA timezone; default from JOB_SCHEDULER_TIMEZONE. */
+  timezone       String?
+  /** Per-job wall-clock cap (ms); default from JOB_SCHEDULER_DEFAULT_TIMEOUT_MS. */
+  timeoutMs      Int?
+  /** Per-job concurrency limit (default from JOB_SCHEDULER_DEFAULT_CONCURRENCY (1). */
+  concurrencyLimit Int?   @default(1)
+  enabled        Boolean @default(false)
+
+   /**
+    * Approval gate — a job cannot be enabled, triggered, or run on its schedule
+    * until a platform admin explicitly approves it. Phase 1 runs this as a
+    * general guardrail so a newly created job (including one that will later
+    * carry operator-authored `code`) never executes unreviewed.
+    */
+  approved     Boolean @default(false)
+   /** Platform admin user id who approved this job (null until approved). */
+  approvedBy   String?
+   /** When the job was last approved. */
+  approvedAt   DateTime?
+   /** Optional note recorded on approval/rejection. */
+  approvalNote String?
+
+   /** Idempotency marker — doubles as the claim gate for overlapping/restart runs. */
+  lastRunAt      DateTime?
+   /** SUCCEEDED | FAILED | CANCELLED */
+  lastRunStatus  String?
+
+   /** Platform admin user id who created this job. */
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  executions     JobExecution[]
+
+   @@unique([platformOrgId, name])
+   @@index([platformOrgId, enabled])
+   @@index([platformOrgId, lastRunAt])
+   @@index([platformOrgId, approved])
+}
+
+model JobExecution {
+  id              String  @id @default(cuid())
+  jobDefinitionId String
+  platformOrgId   String
+
+  startedAt       DateTime @default(now())
+  finishedAt      DateTime?
+  /** PENDING | RUNNING | SUCCEEDED | FAILED | CANCELLED */
+  status          String
+  /** SCHEDULE | MANUAL */
+  trigger         String
+  /** Who triggered a manual run. */
+  actorId         String?
+  error           String?
+  resultJson      Json?
+  /** Always 'job-scheduler:execution'. */
+  source          String
+
+  createdAt       DateTime @default(now())
+
+  jobDefinition   JobDefinition @relation(fields: [jobDefinitionId], references: [id], onDelete: Cascade)
+
+  @@index([jobDefinitionId, startedAt])
+  @@index([platformOrgId, status])
+}
+
+// ============================================================
+// Contractors (Global shared directory — NOT org-scoped)
+// ============================================================
+
+/**
+ * Contractors — external contractor records shared by all organizations.
+ * Globally accessible on purpose: any organization can use any contractor,
+ * so there is NO organizationId column, NO app-layer tenant scoping
+ * (absent from TENANT_SCOPED_MODELS), and NO RLS policy (RLS-exempt table,
+ * documented in SECURITY.md Appendix B). Grants for nipp_app come from the
+ * ALTER DEFAULT PRIVILEGES set in 20260919035439_rls_roles.
+ */
+model Contractors {
+  contractorId  String         @id @default(cuid()) // Auto-generated primary key
+  companyName   String         // Contractor's company name
+  name          String         // Contractor's name
+  email         String         // Contractor contact email
+  phone         String         // Contractor contact phone number
+  address       String         // Contractor business address
+  postCode      String         // Contractor business address post code
+  type          ContractorType @default(OTHER) // Business type; description clarifies when OTHER
+  description   String?        // Optional; primarily used for type=OTHER, usable by all types
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  workOrders   WorkOrder[]
+  quotations   Quotation[]
+  invoices     Invoice[]
+}

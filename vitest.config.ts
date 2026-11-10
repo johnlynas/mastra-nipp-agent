@@ -8,6 +8,9 @@ export default defineConfig({
     globals: true,
   },
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+      '@prisma-gen': path.resolve(__dirname, './prisma/generated/prisma'),
+    },
   },
 });

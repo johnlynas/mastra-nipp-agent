@@ -13,6 +13,9 @@ mastra.db
 mastra.db-shm
 mastra.db-wal
 
+# Prisma (generated client — schema.prisma is committed, generated/ is not)
+prisma/generated/
+
 # Env
 .env
 .env.local
