@@ -1,0 +1,44 @@
+{
+  "name": "mastra-nipp-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mastra/ai-sdk": "^1.11.3",
+    "@mastra/auth-better-auth": "^1.1.10",
+    "@mastra/core": "^1.82.0",
+    "@mastra/libsql": "^1.29.0",
+    "@mastra/mcp": "^2.8.0",
+    "@mastra/memory": "^1.41.0",
+    "@mastra/next": "^0.2.40",
+    "@prisma/client": "^7.10.1",
+    "better-auth": "^1.7.20",
+    "hono": "^4.13.17",
+    "next": "^16.4.6",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "mastra": "^1.38.0",
+    "prisma": "^7.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@prisma/engines@7.10.1": true,
+    "fsevents@2.3.3": true,
+    "prisma@7.10.1": true
+  }
+}

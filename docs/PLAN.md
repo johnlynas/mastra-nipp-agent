@@ -2,7 +2,7 @@
 
 **Project:** `mastra-nipp-agent`
 **Date:** 2026-11-10
-**Status:** Ready to execute (Phase 1)
+**Status:** Phase 1 complete — executing Phase 2 next
 **Companion doc:** [`DESIGN.md`](./DESIGN.md) — architecture, auth design, security model
 **Ground truth:** [`domain-mapping.json`](./domain-mapping.json) — all 177 MCP tool IDs mapped to the 15 domain tools. Generated from a live `tools/list` call on 2026-11-10; regenerate and re-verify with `python3 scripts/check-mapping-coverage.py` (probes the live server, exits non-zero on drift) after any portal spec change, before Phase 5.
 
@@ -96,12 +96,21 @@ committed to git.
 
 ### Acceptance criteria
 
-- [ ] `npm run dev` serves on `:3001` without errors
-- [ ] `npx tsc --noEmit` passes
-- [ ] `git init` done; `.gitignore` excludes `node_modules`, `.next`, `.mastra`,
+- [x] `npm run dev` serves on `:3001` without errors
+- [x] `npx tsc --noEmit` passes
+- [x] `git init` done; `.gitignore` excludes `node_modules`, `.next`, `.mastra`,
       `*.db*`, `.env`; initial commit made
 
 **Commit checkpoint:** `chore: scaffold next.js + mastra project (phase 1)`
+
+> **Phase 1 notes (2026-11-10):** Scaffolded with Next.js 16.4.6, @mastra/core
+> 1.82.0, TypeScript 5.9.3 (TS 7 is a dev line — pinned to stable 5.x), Prisma
+> 7.10.1. The `@mastra/next` adapter mounts Mastra routes **directly under the
+> prefix** (`prefix: '/api/mastra'` → `GET /api/mastra/agents`,
+> `POST /api/mastra/agents/:id/stream`) — there is no extra `/api` segment, so
+> Phase 2's endpoint below is corrected. npm 12 blocks postinstall scripts by
+> default; run `npm install-scripts approve <pkg>` for esbuild/prisma after a
+> fresh install.
 
 ---
 
@@ -126,8 +135,9 @@ any of the 15 domain tools.
    - the smoke tool
 5. Verify against the **live** MCP server (`:4112`): ask the agent
    "check portal health" through a raw Mastra API call
-   (`POST /api/mastra/api/agents/portal-agent/stream` — verified against a live
-   Mastra server; there is no `/invoke` route in this framework version).
+   (`POST /api/mastra/agents/portal-agent/stream` — verified live in Phase 1;
+   the `@mastra/next` adapter mounts routes directly under its prefix, so there
+   is no `/api/mastra/api/...` form).
 
 ### Acceptance criteria
 
