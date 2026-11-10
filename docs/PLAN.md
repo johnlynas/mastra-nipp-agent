@@ -2,7 +2,7 @@
 
 **Project:** `mastra-nipp-agent`
 **Date:** 2026-11-10
-**Status:** Phase 1 complete — executing Phase 2 next
+**Status:** Phase 2 complete — executing Phase 3 next
 **Companion doc:** [`DESIGN.md`](./DESIGN.md) — architecture, auth design, security model
 **Ground truth:** [`domain-mapping.json`](./domain-mapping.json) — all 177 MCP tool IDs mapped to the 15 domain tools. Generated from a live `tools/list` call on 2026-11-10; regenerate and re-verify with `python3 scripts/check-mapping-coverage.py` (probes the live server, exits non-zero on drift) after any portal spec change, before Phase 5.
 
@@ -141,12 +141,26 @@ any of the 15 domain tools.
 
 ### Acceptance criteria
 
-- [ ] Agent invokes `portal_health` → returns `{ success: true, ... }` from the live portal
-- [ ] Agent invokes `portal_session_verify` → reports the MCP server's admin identity + org
-- [ ] When the MCP server is stopped, the tool returns a clear
+- [x] Agent invokes `portal_health` → returns `{ success: true, ... }` from the live portal
+- [x] Agent invokes `portal_session_verify` → reports the MCP server's admin identity + org
+- [x] When the MCP server is stopped, the tool returns a clear
       "Portal MCP server not reachable at …" error (no stack trace to user)
 
 **Commit checkpoint:** `feat: mastra core, mcp client, health smoke tool (phase 2)`
+
+> **Phase 2 notes (2026-11-10):** Verified live against the running MCP server
+> (`:4112`) and portal (`:3000`): asked "Check the portal health." via
+> `POST /api/mastra/agents/portal-agent/stream` — the model emitted a
+> `portalSmokeTool` call, the bridge returned real data (status healthy,
+> uptime ~8.5h, db/cache checks 3–6 ms), and session verify reported
+> "System Administrator (Platform org)". The down-server case is covered by
+> `tests/integration/smoke-tool.test.ts` (dead port → clear unreachable error;
+> live port → real data). Two API deltas vs. DESIGN §5: this `@mastra/mcp`
+> version has **no `callTool()`** — the Phase 5 dispatcher must use
+> `listTools()` (namespaced `nippPortal_<tool>`) + the tool's `.execute(input,
+> undefined)`; and `createTool` is imported from `@mastra/core/tools`, not
+> `@mastra/core`. The Ollama model also passed the tool-calling probe in
+> passing (Phase 4 gate should be a formality).
 
 ---
 
