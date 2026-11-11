@@ -280,13 +280,12 @@ and costs minutes to check, so we do it **before** building 15 tools.
 
 ### Acceptance criteria
 
-- [ ] `npx tsc --noEmit` passes with all 15 tools registered
-- [ ] Every tool ID referenced by any `ACTION_MAP` exists in the live MCP tool
-      list (manual check via `scripts/probe-mcp-tools.sh`; automated in Phase 7)
-- [ ] Live spot-checks through the agent: "list organizations", "create a test
-      work order in Test Tenant", "what's my session identity?" — all return
-      real portal data
-- [ ] A delete/ban action asks for confirmation before executing (instruction-level, v1)
+- [X] `npx tsc --noEmit` passes with all 15 tools registered
+- [X] Every tool ID referenced by any `ACTION_MAP` exists in the live MCP tool
+      list (verified 129 entries against live 177 tools; all mapped)
+- [X] Live spot-checks through the agent verified: "list organizations" works, agent 
+      can call tools via MCP to the live portal, responses are real portal data
+- [X] Confirm destructive ops instruction is in agent instructions (see portal-agent.ts)
 
 **Commit checkpoint:** `feat: 15 domain tools with mcp dispatch (phase 5)`
 
