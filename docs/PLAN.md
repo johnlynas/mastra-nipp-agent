@@ -2,7 +2,7 @@
 
 **Project:** `mastra-nipp-agent`
 **Date:** 2026-11-10
-**Status:** Phase 3 complete — executing Phase 4 next
+**Status:** Phase 4 complete — executing Phase 5 next
 **Companion doc:** [`DESIGN.md`](./DESIGN.md) — architecture, auth design, security model
 **Ground truth:** [`domain-mapping.json`](./domain-mapping.json) — all 177 MCP tool IDs mapped to the 15 domain tools. Generated from a live `tools/list` call on 2026-11-10; regenerate and re-verify with `python3 scripts/check-mapping-coverage.py` (probes the live server, exits non-zero on drift) after any portal spec change, before Phase 5.
 
@@ -232,11 +232,22 @@ and costs minutes to check, so we do it **before** building 15 tools.
 
 ### Acceptance criteria
 
-- [ ] The chosen model returns a **well-formed `tool_calls`** payload for the probe
-- [ ] Model choice documented in DESIGN §4.1 (already is) and `.env.example`
+- [x] The chosen model returns a **well-formed `tool_calls`** payload for the probe
+- [x] Model choice documented in DESIGN §4.1 (already is) and `.env.example`
 
 **Commit checkpoint:** `docs: record model tool-calling gate result (phase 4)`
 (no code — this phase produces evidence, not features)
+
+> **Phase 4 notes (2026-11-11):** Gate PASSED for `Swift-Qwen3.8-27B-Q4_K_S:latest`.
+> Probed directly against `http://localhost:11434/v1/chat/completions` with one
+> trivial `get_weather` tool and a prompt demanding its use — no Mastra involved.
+> Two consecutive runs both returned `finish_reason: tool_calls` with a single
+> well-formed call: `get_weather({"location": "Amsterdam"})` (valid JSON args,
+> required field present; 6–9 s latency). Evidence script committed at
+> `scripts/probe-tool-calling.py` (re-runnable: `python3 scripts/probe-tool-calling.py [model]`,
+> exits non-zero on a malformed/missing tool call — useful for re-running the gate
+> after any model swap). No alternative models needed; DESIGN §4.1 stands and
+> `.env.example` now records the pass. Phase 5 may proceed.
 
 ---
 
