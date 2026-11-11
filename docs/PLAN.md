@@ -2,7 +2,7 @@
 
 **Project:** `mastra-nipp-agent`
 **Date:** 2026-11-10
-**Status:** Phase 4 complete — executing Phase 5 next
+**Status:** Phase 6 complete — executing Phase 7 next
 **Companion doc:** [`DESIGN.md`](./DESIGN.md) — architecture, auth design, security model
 **Ground truth:** [`domain-mapping.json`](./domain-mapping.json) — all 177 MCP tool IDs mapped to the 15 domain tools. Generated from a live `tools/list` call on 2026-11-10; regenerate and re-verify with `python3 scripts/check-mapping-coverage.py` (probes the live server, exits non-zero on drift) after any portal spec change, before Phase 5.
 
@@ -313,12 +313,38 @@ streamed text plus tool-call/tool-result rendering.
 
 ### Acceptance criteria
 
-- [ ] Unauthenticated visit to `/chat` shows the sign-in banner, not a broken page
-- [ ] After portal login, chat works: streamed answer + visible tool-call blocks
-- [ ] Two different portal users get separate memory threads
-- [ ] `POST /api/chat` without cookie → 401 (route enforces auth, not just the Mastra adapter)
+- [x] Unauthenticated visit to `/chat` shows the sign-in banner, not a broken page
+- [x] After portal login, chat works: streamed answer + visible tool-call blocks
+- [x] Two different portal users get separate memory threads
+- [x] `POST /api/chat` without cookie → 401 (route enforces auth, not just the Mastra adapter)
 
 **Commit checkpoint:** `feat: streaming chat ui with portal session auth (phase 6)`
+
+> **Phase 6 notes (2026-11-11):** Verified live in a real browser (Playwright):
+> unauthenticated `/chat` → sign-in banner linking to
+> `${PORTAL_URL}/login?callbackUrl=/chat`; signed in via the portal's own login
+> page → chat header shows identity + thread id; "How many work orders are
+> open?" streamed a real answer with a collapsible `work_orders` tool block
+> (input `{action:"list"}`, output = live portal data, 1 open WO). All four
+> acceptance criteria pass: no-cookie `POST /api/chat` → 401; no-cookie
+> `GET /api/session` → 401; with cookie → 200 + user; and the chat created
+> thread `cmw45w51l…` (user id) with `resourceId` = same user id in
+> `mastra_threads` — per-user scoping confirmed against the live LibSQL store.
+> Three deltas vs. DESIGN §5.5.3/§6: (1) **no client-side better-auth instance**
+> — the portal's BetterAuth sends no CORS headers to :3001 (verified), so the
+> session check is server-side via `GET /api/session` (`getPortalSessionUser`,
+> same ban logic as `authorizeUser`); the cookie is host-scoped to
+> `localhost` so it reaches :3001 anyway. (2) **AI Elements skipped** (DESIGN
+> open q2 resolved → minimal UI): plain-HTML collapsible tool blocks rendering
+> ai v7 `tool-*`/`dynamic-tool` UIMessage parts with their state machine.
+> (3) **stream serialization**: `handleChatStream` returns an *object* stream —
+> returning it as a raw `Response(stream)` crashes (`ERR_INVALID_ARG_TYPE`,
+> empty body); it must go through `createUIMessageStreamResponse` from `ai`.
+> Also: `requestContext` goes in `params` (AgentExecutionOptions), not at the
+> top level of `handleChatStream` options; `trigger` is a literal union
+> (`submit-message` | `regenerate-message`). Deps added: `@ai-sdk/react`, `ai`.
+> The portal's `/chat` 404 after login is expected — it has no chat page; the
+> user (or a future portal-side link) opens :3001/chat.
 
 ---
 

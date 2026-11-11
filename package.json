@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-sdk/react": "^4.0.173",
     "@mastra/ai-sdk": "^1.11.3",
     "@mastra/auth-better-auth": "^1.1.10",
     "@mastra/core": "^1.82.0",
@@ -20,6 +21,7 @@
     "@mastra/next": "^0.2.40",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
+    "ai": "^7.0.169",
     "better-auth": "^1.7.20",
     "dotenv": "^18.0.10",
     "hono": "^4.13.17",
