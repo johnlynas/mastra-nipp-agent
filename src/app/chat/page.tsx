@@ -23,6 +23,11 @@ import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { portalLoginUrl } from '@/lib/portal-url';
 import { Markdown } from '@/components/markdown';
+import {
+  chatToMarkdown,
+  defaultChatFilename,
+  sanitizeMarkdownFilename,
+} from '@/lib/chat-export';
 
 interface SessionUser {
   id: string;
@@ -118,28 +123,101 @@ function ToolBlock({ part }: { part: ToolPart }) {
   );
 }
 
-function MessageView({ message, isStreaming }: { message: UIMessage; isStreaming: boolean }) {
+/** Clipboard write with a legacy fallback for non-secure contexts. */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the legacy path
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function CopyResponseButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(t);
+  }, [copied]);
+
   return (
-    <div className={`msg msg-${message.role}`}>
-      {message.parts.map((part, i) => {
-        if (isToolPart(part)) return <ToolBlock key={(part as ToolPart).toolCallId} part={part as ToolPart} />;
-        if (part.type === 'text') {
-          const isLast = i === message.parts.length - 1;
-          // Assistant text arrives as Markdown → render it. User input stays
-          // verbatim plain text (nothing to format, no injection surface).
-          return (
-            <div key={i} className="msg-text">
-              {message.role === 'assistant' ? (
-                <Markdown text={part.text} />
-              ) : (
-                <span className="msg-plain">{part.text}</span>
-              )}
-              {isStreaming && isLast ? <span className="cursor" aria-hidden="true" /> : null}
-            </div>
-          );
-        }
-        return null; // reasoning/file/data parts: not rendered in v1
-      })}
+    <button
+      type="button"
+      className={`copy-btn ${copied ? 'copy-btn-done' : ''}`}
+      aria-label={copied ? 'Copied' : 'Copy response'}
+      title={copied ? 'Copied' : 'Copy response'}
+      onClick={() => {
+        void copyToClipboard(text).then((ok) => {
+          if (ok) setCopied(true);
+        });
+      }}
+    >
+      {copied ? (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M20 6 9 17l-5-5" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="8" y="8" width="14" height="14" rx="2" />
+          <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function MessageView({ message }: { message: UIMessage }) {
+  const isAssistant = message.role === 'assistant';
+  // Copyable response text = the raw Markdown of every text part, in order.
+  const responseText = isAssistant
+    ? message.parts
+        .filter((p) => p.type === 'text')
+        .map((p) => (p as { text: string }).text)
+        .join('\n\n')
+    : '';
+
+  return (
+    <div className={`msg-wrap msg-wrap-${message.role}`}>
+      <div className={`msg msg-${message.role}`}>
+        {message.parts.map((part, i) => {
+          if (isToolPart(part)) return <ToolBlock key={(part as ToolPart).toolCallId} part={part as ToolPart} />;
+          if (part.type === 'text') {
+            // Assistant text arrives as Markdown → render it. User input stays
+            // verbatim plain text (nothing to format, no injection surface).
+            return (
+              <div key={i} className="msg-text">
+                {isAssistant ? (
+                  <Markdown text={(part as { text: string }).text} />
+                ) : (
+                  <span className="msg-plain">{(part as { text: string }).text}</span>
+                )}
+              </div>
+            );
+          }
+          return null; // reasoning/file/data parts: not rendered in v1
+        })}
+      </div>
+      {isAssistant && responseText ? (
+        <div className="msg-actions">
+          <CopyResponseButton text={responseText} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -159,9 +237,71 @@ function SignInBanner({ reason }: { reason?: string }) {
   );
 }
 
+/** Modal that prompts for a filename before downloading the chat as .md. */
+function SaveChatModal({
+  defaultName,
+  onClose,
+  onSave,
+}: {
+  defaultName: string;
+  onClose: () => void;
+  onSave: (filename: string) => void;
+}) {
+  const [name, setName] = useState(defaultName);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="save-chat-title" className="modal">
+        <h2 id="save-chat-title">Save chat as Markdown</h2>
+        <p className="muted">The entire conversation is downloaded as a single .md file.</p>
+        <label htmlFor="save-chat-filename">File name</label>
+        <input
+          id="save-chat-filename"
+          ref={inputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onSave(sanitizeMarkdownFilename(name));
+          }}
+        />
+        <div className="modal-actions">
+          <button type="button" className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!name.trim()}
+            onClick={() => onSave(sanitizeMarkdownFilename(name))}
+          >
+            Save .md
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [auth, setAuth] = useState<AuthState>({ status: 'checking' });
   const [input, setInput] = useState('');
+  const [saveOpen, setSaveOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Session check on mount.
@@ -211,6 +351,26 @@ export default function ChatPage() {
 
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
 
+  // Download the whole conversation as a markdown file (client-side blob).
+  const downloadChatMarkdown = useCallback(
+    (filename: string) => {
+      const name = sanitizeMarkdownFilename(filename);
+      const markdown = chatToMarkdown(chat.messages);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke on the next tick so the download has claimed the blob.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setSaveOpen(false);
+    },
+    [chat.messages],
+  );
+
   const send = () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -242,9 +402,16 @@ export default function ChatPage() {
     <main className="chat-main">
       <header className="chat-header">
         <h1>NIPP Portal Agent</h1>
-        <span className="muted">
-          {auth.user.name ?? auth.user.email} · thread {auth.user.id.slice(0, 8)}…
-        </span>
+        <div className="chat-header-actions">
+          <span>{auth.user.name ?? auth.user.email}</span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setSaveOpen(true)}
+          >
+            Save as .md
+          </button>
+        </div>
       </header>
 
       <div className="chat-scroll" ref={scrollRef}>
@@ -255,7 +422,7 @@ export default function ChatPage() {
           </p>
         )}
         {chat.messages.map((m) => (
-          <MessageView key={m.id} message={m} isStreaming={busy} />
+          <MessageView key={m.id} message={m} />
         ))}
       </div>
 
@@ -287,6 +454,14 @@ export default function ChatPage() {
           {busy ? 'Working…' : 'Send'}
         </button>
       </form>
+
+      {saveOpen && (
+        <SaveChatModal
+          defaultName={defaultChatFilename()}
+          onClose={() => setSaveOpen(false)}
+          onSave={downloadChatMarkdown}
+        />
+      )}
     </main>
   );
 }
