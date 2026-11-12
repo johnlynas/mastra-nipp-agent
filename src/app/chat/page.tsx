@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { portalLoginUrl } from '@/lib/portal-url';
+import { Markdown } from '@/components/markdown';
 
 interface SessionUser {
   id: string;
@@ -124,11 +125,17 @@ function MessageView({ message, isStreaming }: { message: UIMessage; isStreaming
         if (isToolPart(part)) return <ToolBlock key={(part as ToolPart).toolCallId} part={part as ToolPart} />;
         if (part.type === 'text') {
           const isLast = i === message.parts.length - 1;
+          // Assistant text arrives as Markdown → render it. User input stays
+          // verbatim plain text (nothing to format, no injection surface).
           return (
-            <p key={i} className="msg-text">
-              {part.text}
+            <div key={i} className="msg-text">
+              {message.role === 'assistant' ? (
+                <Markdown text={part.text} />
+              ) : (
+                <span className="msg-plain">{part.text}</span>
+              )}
               {isStreaming && isLast ? <span className="cursor" aria-hidden="true" /> : null}
-            </p>
+            </div>
           );
         }
         return null; // reasoning/file/data parts: not rendered in v1
