@@ -105,18 +105,24 @@ main {
    ============================================================ */
 
 .chat-main {
-  max-width: 48rem;
-  margin: 0 auto;
-  min-height: 100dvh;
+  /* Locked to the viewport: the header and composer stay put, only
+     .chat-scroll scrolls beneath them. Full-bleed — no max-width cap,
+     so the fixed top bar spans the whole window. */
+  height: 100dvh;
+  overflow: hidden;
+  width: 100%;
+  max-width: none;
+  margin: 0;
   display: flex;
   flex-direction: column;
   padding: 1rem;
 }
 
+/* Three zones — title, search, actions — spread evenly across the bar. */
 .chat-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 22rem) 1fr;
+  align-items: center;
   gap: 1rem;
   border-bottom: 1px solid var(--slate-200);
   padding-bottom: 0.75rem;
@@ -127,12 +133,96 @@ main {
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-header-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.75rem;
+}
+
+.chat-user {
+  color: var(--slate-500);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+/* Search box — centered zone of the fixed bar */
+.chat-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0 0.35rem 0 0.7rem;
+  border: 1px solid var(--slate-300);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.chat-search:focus-within {
+  border-color: var(--navy-700);
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.chat-search-icon {
+  flex: none;
+  color: var(--slate-400);
+}
+
+.chat-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--slate-900);
+  padding: 0.42rem 0;
+}
+
+.chat-search input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Native clear button stays in the system voice */
+.chat-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.chat-search-count {
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--slate-500);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-search-count.is-zero {
+  color: var(--danger-ink);
+}
+
+/* Narrow screens: title + actions on one row, search full-width below */
+@media (max-width: 560px) {
+  .chat-header {
+    grid-template-columns: 1fr auto;
+    row-gap: 0.6rem;
+  }
+
+  .chat-search {
+    grid-column: 1 / -1;
+    order: 3;
+  }
 }
 
 .muted {
@@ -147,11 +237,40 @@ main {
 
 .chat-scroll {
   flex: 1;
+  min-height: 0; /* allow the flex child to shrink below content size */
   overflow-y: auto;
   padding: 1rem 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+/* Search: non-matching messages recede so matches stand out */
+.msg-dimmed {
+  opacity: 0.32;
+  filter: saturate(0.6);
+  transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+/* Match highlight in user messages (plain text) */
+mark {
+  padding: 0 0.1em;
+  border-radius: 3px;
+  background: rgba(245, 166, 35, 0.4);
+  color: inherit;
+}
+
+/* Visually hidden — screen-reader-only labels */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .msg-wrap {
