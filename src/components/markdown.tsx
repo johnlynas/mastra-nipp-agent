@@ -16,12 +16,19 @@
 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { rehypeHighlight } from '@/lib/highlight';
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, query = '' }: { text: string; query?: string }) {
+  // Conversation search: a rehype transform wraps matches in <mark> across the
+  // whole parsed tree — paragraphs, headings, table cells, links, inline code,
+  // and fenced code blocks alike.
+  const plugins = [rehypeHighlight(query)];
+
   return (
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={plugins}
         components={{
           // Links open in a new tab; keep the chat session intact.
           a: ({ node, ...props }) => (

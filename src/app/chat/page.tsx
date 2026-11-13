@@ -28,6 +28,7 @@ import {
   defaultChatFilename,
   sanitizeMarkdownFilename,
 } from '@/lib/chat-export';
+import { highlightText } from '@/lib/highlight';
 
 interface SessionUser {
   id: string;
@@ -71,7 +72,7 @@ function previewOutput(output: unknown): string {
   }
 }
 
-function ToolBlock({ part }: { part: ToolPart }) {
+function ToolBlock({ part, query }: { part: ToolPart; query: string }) {
   const [open, setOpen] = useState(false);
   const name = toolNameOf(part);
   const running =
@@ -86,7 +87,7 @@ function ToolBlock({ part }: { part: ToolPart }) {
         ) : (
           <span className={failed ? 'tool-dot tool-dot-err' : 'tool-dot'} aria-hidden="true" />
         )}
-        <span className="tool-name">{name}</span>
+        <span className="tool-name">{highlightText(name, query)}</span>
         <span className="tool-state">
           {running
             ? part.state === 'input-streaming'
@@ -102,19 +103,19 @@ function ToolBlock({ part }: { part: ToolPart }) {
           {part.input !== undefined && (
             <>
               <div className="tool-label">input</div>
-              {JSON.stringify(part.input, null, 2)}
+              {highlightText(JSON.stringify(part.input, null, 2), query)}
             </>
           )}
           {part.output !== undefined && (
             <>
               <div className="tool-label">result</div>
-              {previewOutput(part.output)}
+              {highlightText(previewOutput(part.output), query)}
             </>
           )}
           {part.errorText && (
             <>
               <div className="tool-label">error</div>
-              {part.errorText}
+              {highlightText(part.errorText, query)}
             </>
           )}
         </pre>
@@ -182,33 +183,6 @@ function CopyResponseButton({ text }: { text: string }) {
   );
 }
 
-/** Escape regex metacharacters so user queries are matched literally. */
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Case-insensitive <mark> highlighting for plain (non-Markdown) text —
- * the user's own messages. Assistant Markdown is matched on the raw text
- * but not inline-marked, so the renderer stays untouched.
- */
-function highlight(text: string, query: string): React.ReactNode {
-  const q = query.trim();
-  if (!q) return text;
-  const re = new RegExp(escapeRegExp(q), 'gi');
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    parts.push(<mark key={m.index}>{m[0]}</mark>);
-    last = m.index + m[0].length;
-    if (m[0].length === 0) re.lastIndex++; // zero-length guard
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
-}
-
 function MessageView({ message, query }: { message: UIMessage; query: string }) {
   const isAssistant = message.role === 'assistant';
   // Copyable response text = the raw Markdown of every text part, in order.
@@ -220,7 +194,7 @@ function MessageView({ message, query }: { message: UIMessage; query: string }) 
     : '';
 
   // Search match: any text part, or a tool block's name/state/result preview.
-  const q = query.toLowerCase();
+  const q = query.trim().toLowerCase();
   const matches = q.length > 0 && message.parts.some((part) => {
     if (isToolPart(part)) {
       const tp = part as ToolPart;
@@ -233,7 +207,7 @@ function MessageView({ message, query }: { message: UIMessage; query: string }) 
     <div className={`msg-wrap msg-wrap-${message.role} ${matches ? '' : q ? 'msg-dimmed' : ''}`}>
       <div className={`msg msg-${message.role}`}>
         {message.parts.map((part, i) => {
-          if (isToolPart(part)) return <ToolBlock key={(part as ToolPart).toolCallId} part={part as ToolPart} />;
+          if (isToolPart(part)) return <ToolBlock key={(part as ToolPart).toolCallId} part={part as ToolPart} query={query} />;
           if (part.type === 'text') {
             const text = (part as { text: string }).text;
             // Assistant text arrives as Markdown → render it. User input stays
@@ -241,9 +215,9 @@ function MessageView({ message, query }: { message: UIMessage; query: string }) 
             return (
               <div key={i} className="msg-text">
                 {isAssistant ? (
-                  <Markdown text={text} />
+                  <Markdown text={text} query={query} />
                 ) : (
-                  <span className="msg-plain">{highlight(text, query)}</span>
+                  <span className="msg-plain">{highlightText(text, query)}</span>
                 )}
               </div>
             );
@@ -391,21 +365,8 @@ export default function ChatPage() {
   const busy = chat.status === 'submitted' || chat.status === 'streaming';
 
   // Search: which messages contain the query (case-insensitive, across text
-  // parts and tool-block names/results). Drives dimming + the match counter.
+  // parts and tool-block names/results). Drives dimming of non-matching rows.
   const q = query.trim().toLowerCase();
-  const matchCount = q
-    ? chat.messages.filter((m) =>
-        m.parts.some((part) => {
-          if (isToolPart(part)) {
-            const tp = part as ToolPart;
-            return [toolNameOf(tp), tp.state, previewOutput(tp.output)].some(
-              (s) => s.toLowerCase().includes(q),
-            );
-          }
-          return part.type === 'text' && (part as { text: string }).text.toLowerCase().includes(q);
-        }),
-      ).length
-    : 0;
 
   // Download the whole conversation as a markdown file (client-side blob).
   const downloadChatMarkdown = useCallback(
@@ -486,13 +447,6 @@ export default function ChatPage() {
             autoComplete="off"
             spellCheck={false}
           />
-          {q ? (
-            <span className={`chat-search-count ${matchCount === 0 ? 'is-zero' : ''}`}>
-              {matchCount === 0
-                ? 'No matches'
-                : `${matchCount} of ${chat.messages.length}`}
-            </span>
-          ) : null}
         </div>
         <div className="chat-header-actions">
           <span className="chat-user">{auth.user.name ?? auth.user.email}</span>
