@@ -43,6 +43,8 @@ export const portalAgent = new Agent({
   name: 'NIPP Portal Agent',
   instructions: INSTRUCTIONS,
   tools: domainTools,
+  // Domain + query playbook for the portal (SKILL.md on disk; see DESIGN §4.2).
+  skills: ['./src/mastra/skills/nipp-portal'],
   model: {
     id: `ollama/${config.ollamaModel}`,
     url: config.ollamaBaseUrl,
