@@ -68,3 +68,42 @@ describe('Markdown', () => {
     expect(html.startsWith('<div class="md">')).toBe(true);
   });
 });
+
+describe('Markdown search highlighting', () => {
+  function renderWithQuery(text: string, query: string): string {
+    return renderToStaticMarkup(React.createElement(Markdown, { text, query }));
+  }
+
+  it('marks matches in plain paragraphs, case-insensitively', () => {
+    const html = renderWithQuery('The work order is overdue.', 'WORK ORDER');
+    expect(html).toContain('<mark>work order</mark>');
+    expect(html).not.toContain('<mark>The</mark>');
+  });
+
+  it('marks matches inside inline code spans', () => {
+    const html = renderWithQuery('Run `npm run dev` now.', 'dev');
+    expect(html).toContain('<code class="md-inline">npm run <mark>dev</mark></code>');
+  });
+
+  it('marks matches inside table cells and headings', () => {
+    const html = renderWithQuery('# Orgs\n\n| a | b |\n|---|---|\n| orgs | 2 |', 'orgs');
+    expect(html).toContain('<h1><mark>Orgs</mark></h1>');
+    expect(html).toContain('<td><mark>orgs</mark></td>');
+  });
+
+  it('marks matches inside fenced code blocks', () => {
+    const html = renderWithQuery('```ts\nconst total = 42;\n```', 'total');
+    expect(html).toContain('const <mark>total</mark> = 42;');
+  });
+
+  it('emits no marks when the query is empty or whitespace', () => {
+    expect(renderWithQuery('hello world', '')).not.toContain('<mark>');
+    expect(renderWithQuery('hello world', '   ')).not.toContain('<mark>');
+  });
+
+  it('matches literally — regex metacharacters are not special', () => {
+    const html = renderWithQuery('a.b and aXb', 'a.b');
+    expect(html).toContain('<mark>a.b</mark>');
+    expect(html).not.toContain('<mark>aXb</mark>');
+  });
+});

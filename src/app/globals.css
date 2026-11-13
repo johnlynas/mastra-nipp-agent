@@ -200,18 +200,6 @@ main {
   appearance: none;
 }
 
-.chat-search-count {
-  flex: none;
-  font-size: 0.72rem;
-  color: var(--slate-500);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.chat-search-count.is-zero {
-  color: var(--danger-ink);
-}
-
 /* Narrow screens: title + actions on one row, search full-width below */
 @media (max-width: 560px) {
   .chat-header {
