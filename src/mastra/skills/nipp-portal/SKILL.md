@@ -28,7 +28,7 @@ Each tool takes an `action` (an enum) plus optional parameters; the tool's descr
 | `quotes` | Quotations within work orders: CRUD, `t_list` | "quotes on this work order", "which quotes are accepted?" |
 | `resources` | Global feature catalog (gates which features exist): CRUD, `list_names` | "what features does the platform have?" |
 | `units` | Properties per org: CRUD | "how many units?", "list rented apartments" |
-| `calendar` | Org calendars + events (viewings, inspections, lease signings…): CRUD for both, `upcoming_events`, `notification_history` | "what's on this week's calendar?" |
+| `calendar` | Org calendars + events (viewings, inspections, lease signings…): CRUD for both, `upcoming_events`, `notification_history`; calendar queries work with ISO 8601 dates | "what's on this week's calendar?" |
 | `jobs` | Platform-only background job scheduler (Bree) with an approval gate: CRUD, `run`/`dry_run`, `history`, `approvals`; `s_*` variants | "run the nightly sync", "any failed job runs?" |
 | `system` | Health, `session_verify`, `audit_logs`, `cache_metrics`, `stats`, notifications | "who changed what last week?", "is the portal healthy?" |
 | `security` | Payload encryption keys: `create_payload_key`/`revoke_payload_key` (sensitive) | "rotate the payload key" |
