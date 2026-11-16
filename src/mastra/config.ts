@@ -5,6 +5,8 @@ export interface AgentConfig {
   ollamaModel: string;
   /** Portal MCP server Streamable HTTP endpoint */
   portalMcpUrl: string;
+  /** Base URL of the portal MCP server (health probe target: {url}/mcp-health) */
+  mcpServerUrl: string;
 }
 
 /**
@@ -17,5 +19,6 @@ export function loadConfig(): AgentConfig {
     ollamaModel: process.env.OLLAMA_MODEL ?? 'Swift-Qwen3.8-27B-Q4_K_S:latest',
     portalMcpUrl:
       process.env.PORTAL_MCP_URL ?? 'http://localhost:4112/api/mcp/nipp-portal/mcp',
+    mcpServerUrl: (process.env.MCP_SERVER_URL ?? 'http://localhost:4112').replace(/\/+$/, ''),
   };
 }
