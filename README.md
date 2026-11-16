@@ -14,7 +14,7 @@ will build from. The agent code lands here as the phases are executed (see
 
 ```mermaid
 graph TB
-    UI["Chat UI<br/>Next.js + AI Elements"] -->|cookie| AGENT
+    UI["Chat UI<br/>Next.js + AI Elements"] -->|"Bearer token (primary)<br/>/ session cookie"| AGENT
 
     subgraph "mastra-nipp-agent (:3001) — this repo"
         AGENT["Portal Agent<br/>(Mastra, Ollama 27B)"]
@@ -47,6 +47,22 @@ tools**. Loading all of them into a local 27B model would burn ~40–60K tokens
 of context and overwhelm tool selection. So the agent exposes only **15 domain
 tools** (one per service area), each with an `action` enum that dispatches to
 the right MCP tools on demand — a ~90% reduction in tool-definition context.
+
+### Auth: two doors
+
+The chat UI is embedded as an iframe inside the portal's admin Agent page, so
+it authenticates through two doors (in order):
+
+1. **Bearer token (primary).** The portal appends `?agentToken=*** to the
+   iframe URL; the UI sends it back as `Authorization: Bearer *** better-auth's
+   `bearer()` plugin rewrites that into a session cookie for the request, and
+   the token is HMAC-verified against the shared `BETTER_AUTH_SECRET`. This is
+   immune to the `__Secure-` cookie-name mismatch that breaks cookie auth over
+   plain HTTP in production.
+2. **Session cookie (fallback).** For direct browser access, the agent
+   normalizes the portal's `__Secure-better-auth.session_token` name onto the
+   non-secure name `getSession()` reads — so cookie auth works in both dev and
+   prod instead of silently 401-ing.
 
 ## What's in this repo
 
@@ -98,3 +114,12 @@ python3 scripts/check-mapping-coverage.py   # needs portal + MCP server running
 
 Then follow Phase 1 of [docs/PLAN.md](./docs/PLAN.md) — each phase ends with a
 named commit checkpoint, so the git history doubles as progress tracking.
+
+## Recent changes
+
+- **Two-doored session auth for the embedded chat UI** (`3ab916b`). Added
+  better-auth's `bearer()` plugin so the portal can pass a live session token
+  via `?agentToken=*** the iframe URL, and normalized the `__Secure-` cookie
+  name server-side as a fallback — fixing the prod-only 401 that kept the agent
+  from rendering. The sign-in banner now opens in `_top`, and its callback
+  points to `/dashboard/admin/agent`. See [Auth: two doors](#auth-two-doors).
