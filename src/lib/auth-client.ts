@@ -31,15 +31,51 @@ export interface PortalSessionUser {
   email?: string;
 }
 
+/** Read a single cookie value from a raw `Cookie:` header (null if absent). */
+function parseCookieValue(cookieHeader: string, name: string): string | null {
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    const key = part.slice(0, eq).trim();
+    if (key === name) return part.slice(eq + 1).trim();
+  }
+  return null;
+}
+
 /**
- * Verify the portal session cookie on a same-origin request (server side).
+ * Verify the caller's portal session on a same-origin request (server side).
  * Mirrors `authorizeUser` in src/mastra/index.ts: valid session + active-ban
  * check against the live User row (fail-closed on DB error).
+ *
+ * Two doors, in order:
+ *  1. Bearer header — `Authorization: Bearer <portal session token>` (the
+ *     primary door for the admin-dashboard embed; see bearer() in
+ *     src/mastra/auth.ts). The plugin rewrites it to a session cookie before
+ *     getSession runs, so no extra handling is needed here.
+ *  2. Session cookie — direct browser access to /chat. In production the
+ *     portal mints `__Secure-better-auth.session_token` (useSecureCookies),
+ *     but this instance resolves the non-secure name over plain HTTP — so we
+ *     copy the secure-prefixed value onto the name getSession() actually reads.
+ *     Without this, cookie auth works in dev (plain name) and silently 401s
+ *     in production (prefixed name), which is exactly the "agent not rendered"
+ *     bug.
  */
 export async function getPortalSessionUser(
   req: Request,
 ): Promise<PortalSessionUser | null> {
   const headers = new Headers(req.headers);
+
+  // Cookie-name normalization (door 2 above) — only when the bearer door is
+  // not already carrying the session. The web Request has no .cookies, so read
+  // the raw Cookie header directly.
+  if (!headers.get('authorization')) {
+    const cookieHeader = headers.get('cookie') ?? '';
+    const secureCookie = parseCookieValue(cookieHeader, '__Secure-better-auth.session_token');
+    if (secureCookie && !parseCookieValue(cookieHeader, 'better-auth.session_token')) {
+      headers.set('cookie', `better-auth.session_token=${secureCookie}`);
+    }
+  }
+
   let result: { user?: { id: string; name?: string; email?: string } } | null = null;
   try {
     result = await agentAuth.api.getSession({ headers });

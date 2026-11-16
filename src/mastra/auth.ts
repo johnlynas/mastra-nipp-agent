@@ -1,5 +1,6 @@
 import { betterAuth, type BetterAuthOptions } from 'better-auth/minimal';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
+import { bearer } from 'better-auth/plugins';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma-gen/client';
 
@@ -42,6 +43,19 @@ const agentAuthOptions: BetterAuthOptions = {
   secret: process.env.BETTER_AUTH_SECRET!, // MUST equal the portal's (risk 8)
   database: prismaAdapter(agentPrisma, { provider: 'postgresql' }),
   emailAndPassword: { enabled: true },
+  plugins: [
+    // Bearer door (server-to-server): converts `Authorization: Bearer <token>`
+    // into a session cookie for the duration of the request, so
+    // agentAuth.api.getSession({ headers }) resolves a portal session from the
+    // header alone — no cookie required. The token is the portal's session
+    // token (the `{token}` in the sign-in body / `set-auth-token` response
+    // header), HMAC-verified against the shared BETTER_AUTH_SECRET. This is the
+    // primary auth path for the admin-dashboard embed: the portal injects the
+    // caller's live session token into the iframe URL and the chat UI sends it
+    // back as a Bearer header (immune to the __Secure- cookie-name mismatch that
+    // breaks cookie verification over plain HTTP in production).
+    bearer(),
+  ],
 };
 
 export const agentAuth = betterAuth(agentAuthOptions);

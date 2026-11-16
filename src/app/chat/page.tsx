@@ -3,10 +3,18 @@
 /**
  * Streaming chat UI (PHASE 6, DESIGN §5.5.5).
  *
- * Flow on mount: GET /api/session (same-origin; the cookie the portal set at
- * :3000 is host-scoped to `localhost` so it arrives here too). No session →
- * sign-in banner linking to the portal's login page. Signed in → useChat with
- * DefaultChatTransport({ api: '/api/chat', credentials: 'include' }).
+ * Flow on mount: GET /api/session (same-origin). Auth is two-doored:
+ *  1. Bearer token — when the portal's admin Agent page embeds this UI it
+ *     appends `?agentToken=*** to the iframe URL (the caller's live portal
+ *     session token). Every request then carries `Authorization: Bearer <token>`,
+ *     verified server-side by better-auth's bearer plugin against the shared
+ *     BETTER_AUTH_SECRET. This is the production path — it is immune to the
+ *     __Secure- cookie-name mismatch that breaks cookie auth over plain HTTP.
+ *  2. Session cookie — direct browser access (dev, or opening /chat directly):
+ *     the portal's cookie is host-scoped to `localhost` so it arrives here too;
+ *     the agent normalizes the prod __Secure- name server-side.
+ * No session → sign-in banner linking to the portal's login page. Signed in →
+ * useChat with DefaultChatTransport({ api: '/api/chat', credentials: 'include' }).
  *
  * Rendering: plain-HTML collapsible tool blocks (DESIGN open q2 — AI Elements
  * skipped; the install is light and the surface needed is small). Tool parts
@@ -18,7 +26,7 @@
  * hits an error status we re-check /api/session and demote to signed-out on 401.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, type UIMessage } from 'ai';
 import { portalLoginUrl } from '@/lib/portal-url';
@@ -242,7 +250,7 @@ function SignInBanner({ reason }: { reason?: string }) {
         {reason ?? 'Sign in to the portal to chat with the agent.'} The session
         is shared with the NIPP portal — sign in once there and come back.
       </p>
-      <a className="btn" href={portalLoginUrl()}>
+      <a className="btn" href={portalLoginUrl()} target="_top">
         Sign in to the portal
       </a>
     </div>
@@ -312,17 +320,30 @@ function SaveChatModal({
 
 export default function ChatPage() {
   const [auth, setAuth] = useState<AuthState>({ status: 'checking' });
+  // Bearer door (see file header): the portal's admin Agent page embeds this
+  // UI with ?agentToken=*** — read it once on mount. It stays in JS memory
+  // only; we never echo it into the DOM or log it.
+  const [agentToken] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('agentToken');
+  });
+  // Stable identity across renders — used as a fetch/effect dependency.
+  const authHeaders = useMemo<Record<string, string>>(() => {
+    const h: Record<string, string> = {};
+    if (agentToken) h.Authorization = `Bearer ${agentToken}`;
+    return h;
+  }, [agentToken]);
   const [input, setInput] = useState('');
   const [saveOpen, setSaveOpen] = useState(false);
   const [query, setQuery] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Session check on mount.
+  // Session check on mount (bearer header when embedded, cookie otherwise).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/session', { credentials: 'include' });
+        const res = await fetch('/api/session', { credentials: 'include', headers: authHeaders });
         if (!res.ok) throw new Error(`session ${res.status}`);
         const data = (await res.json()) as { user: SessionUser };
         if (!cancelled) setAuth({ status: 'signed-in', user: data.user });
@@ -333,24 +354,24 @@ export default function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authHeaders]);
 
   const signedIn = auth.status === 'signed-in';
 
   const chat = useChat<UIMessage>({
     id: signedIn ? auth.user.id : undefined, // per-user thread (DESIGN §5.5.5)
-    transport: new DefaultChatTransport({ api: '/api/chat', credentials: 'include' }),
+    transport: new DefaultChatTransport({ api: '/api/chat', credentials: 'include', headers: authHeaders }),
   });
 
   // 401 / session-expired mid-conversation → re-check and show the banner.
   const checkSession = useCallback(async () => {
     try {
-      const res = await fetch('/api/session', { credentials: 'include' });
+      const res = await fetch('/api/session', { credentials: 'include', headers: authHeaders });
       if (!res.ok) setAuth({ status: 'signed-out' });
     } catch {
       // network blip — keep current auth state
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     if (chat.status === 'error') void checkSession();
