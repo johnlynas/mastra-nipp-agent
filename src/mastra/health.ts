@@ -12,6 +12,7 @@
  *   - mcpServer:  the portal MCP server's /mcp-health → degraded when down
  *                 (the agent depends on it for portal tools, but the server
  *                 itself stays up and answering probes)
+ *   - portal:     the NIPP portal's public /api/health → degraded when down
  *
  * A dead process is the only red state — the APM sees it as an unreachable
  * endpoint, not a JSON status. So this route answers 200 for healthy/degraded
@@ -87,24 +88,58 @@ async function checkMcpServer(mcpServerUrl: string): Promise<CheckResult> {
   }
 }
 
+/** Probe the NIPP portal's own public health endpoint (no auth required). */
+async function checkPortal(portalUrl: string): Promise<CheckResult> {
+  if (!portalUrl) {
+    return { status: 'skipped', message: 'Portal not configured' };
+  }
+  const start = Date.now();
+  try {
+    const res = await fetch(`${portalUrl.replace(/\/+$/, '')}/api/health`, {
+      signal: AbortSignal.timeout(DEPENDENCY_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      let detail: unknown;
+      try {
+        const body = (await res.json()) as { status?: string };
+        detail = body.status ?? res.status;
+      } catch {
+        detail = res.status;
+      }
+      return {
+        status: 'unhealthy',
+        latency_ms: Date.now() - start,
+        error: `Portal reported unhealthy (status ${detail})`,
+      };
+    }
+    return { status: 'healthy', latency_ms: Date.now() - start };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: `Portal unreachable (${error instanceof Error ? error.message : String(error)})`,
+    };
+  }
+}
+
 /** Run all health checks — returns current state only, no side effects. */
 export async function checkHealthStatus(
   mastra: Mastra,
   config: AgentConfig,
 ): Promise<HealthResponse> {
-  const [storage, mcpServer] = await Promise.all([
+  const [storage, mcpServer, portal] = await Promise.all([
     checkStorage(mastra),
     checkMcpServer(config.mcpServerUrl),
+    checkPortal(config.portalUrl),
   ]);
 
   // All dependencies are non-critical (amber) — the agent server process is up
   // and answering probes even if they fail. A dead process never reaches this code.
   const status: HealthResponse['status'] =
-    storage.status === 'unhealthy' || mcpServer.status === 'unhealthy'
+    storage.status === 'unhealthy' || mcpServer.status === 'unhealthy' || portal.status === 'unhealthy'
       ? 'degraded'
       : 'healthy';
 
-  const checks: Record<string, CheckResult> = { storage, mcpServer };
+  const checks: Record<string, CheckResult> = { storage, mcpServer, portal };
   if (status !== 'healthy') {
     console.warn(`[HEALTH] ${status}: ${JSON.stringify(checks)}`);
   }

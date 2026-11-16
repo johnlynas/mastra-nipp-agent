@@ -7,6 +7,8 @@ export interface AgentConfig {
   portalMcpUrl: string;
   /** Base URL of the portal MCP server (health probe target: {url}/mcp-health) */
   mcpServerUrl: string;
+  /** Base URL of the NIPP portal (health probe target: {url}/api/health) */
+  portalUrl: string;
 }
 
 /**
@@ -20,5 +22,6 @@ export function loadConfig(): AgentConfig {
     portalMcpUrl:
       process.env.PORTAL_MCP_URL ?? 'http://localhost:4112/api/mcp/nipp-portal/mcp',
     mcpServerUrl: (process.env.MCP_SERVER_URL ?? 'http://localhost:4112').replace(/\/+$/, ''),
+    portalUrl: (process.env.PORTAL_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
   };
 }

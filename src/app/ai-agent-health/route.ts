@@ -15,6 +15,7 @@ import { checkHealthStatus, buildHealthResponse } from '@/mastra/health';
  *   - storage:    the agent server's own LibSQL store
  *   - mcpServer:  the portal MCP server's /mcp-health (agent depends on it for
  *                 portal tools, but the server itself stays up and answering)
+ *   - portal:     the NIPP portal's public /api/health
  *
  * A dead process is the only red state — the APM sees an unreachable endpoint,
  * not a JSON status. So this answers 200 for healthy/degraded, 503 only if a

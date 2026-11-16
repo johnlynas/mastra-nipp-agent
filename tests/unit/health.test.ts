@@ -7,6 +7,7 @@ const baseConfig = {
   ollamaModel: 'test',
   portalMcpUrl: 'http://localhost:4112/api/mcp/nipp-portal/mcp',
   mcpServerUrl: 'http://localhost:9999', // dead port → unhealthy
+  portalUrl: 'http://localhost:9998', // dead port → unhealthy
 };
 
 describe('checkHealthStatus degraded (amber) semantics', () => {
@@ -16,6 +17,7 @@ describe('checkHealthStatus degraded (amber) semantics', () => {
     expect(health.status).toBe('degraded');
     expect(health.checks.storage.status).toBe('unhealthy');
     expect(health.checks.mcpServer.status).toBe('unhealthy');
+    expect(health.checks.portal.status).toBe('unhealthy');
     expect(health.checks.ollama).toBeUndefined();
   });
 
@@ -23,5 +25,11 @@ describe('checkHealthStatus degraded (amber) semantics', () => {
     const mastra = {} as Mastra;
     const health = await checkHealthStatus(mastra, { ...baseConfig, mcpServerUrl: '' });
     expect(health.checks.mcpServer.status).toBe('skipped');
+  });
+
+  it('skips the portal check when it is not configured', async () => {
+    const mastra = {} as Mastra;
+    const health = await checkHealthStatus(mastra, { ...baseConfig, portalUrl: '' });
+    expect(health.checks.portal.status).toBe('skipped');
   });
 });
