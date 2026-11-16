@@ -111,8 +111,6 @@ local dev layout (portal `:3000`, MCP server `:4112`, Ollama `:11434`).
 | `OLLAMA_BASE_URL` | `http://localhost:11434/v1` | Ollama's OpenAI-compatible Chat Completions endpoint |
 | `OLLAMA_MODEL` | `Swift-Qwen3.8-27B-Q4_K_S:latest` | Model ID — no `ollama/` prefix; it is added in code (DESIGN §4.1) |
 | `PORTAL_MCP_URL` | `http://localhost:4112/api/mcp/nipp-portal/mcp` | Streamable HTTP endpoint of the portal MCP server — where every domain tool call goes |
-| `MCP_SERVER_URL` | `http://localhost:4112` | Base URL of the MCP server, probed at `{MCP_SERVER_URL}/mcp-health` by the agent's own `/ai-agent-health` endpoint (degraded/amber when down) |
-| `PORTAL_BASE_URL` | `http://localhost:3000` | Base URL of the NIPP portal, probed at `{PORTAL_BASE_URL}/api/health` by `/ai-agent-health` (degraded/amber when down) |
 | `BETTER_AUTH_SECRET` | — *(no default)* | **Must be byte-identical to the portal's** — session verification key. Rotation means updating both apps and restarting both |
 | `BETTER_AUTH_URL` | `http://localhost:3000` | Portal origin (session cookie base) |
 | `DATABASE_URL` | — *(no default)* | **Must be the portal's PgBouncer pooler URL** (not a direct Postgres connection) — shared session DB for BetterAuth verification and the ban-status check. If this fails to connect, auth fails closed: every request 401s |
@@ -134,9 +132,8 @@ both come straight from the portal's `.env`:
 
 The agent exposes a public, unauthenticated liveness/readiness probe at
 **`GET /ai-agent-health`** (root-level, like the MCP server's `/mcp-health`).
-It reports `storage` (its own LibSQL store), `mcpServer`
-(`{MCP_SERVER_URL}/mcp-health`) and `portal` (`{PORTAL_BASE_URL}/api/health`) —
-all amber/degraded when down, since the portal keeps working without the agent. A dead process is the only red state:
+It reports `storage` (its own LibSQL store) — amber/degraded when down, since
+the service keeps working without it. A dead process is the only red state:
 the probe returns 200 for healthy/degraded and 503 is reserved for a future
 critical classification.
 
@@ -156,7 +153,7 @@ named commit checkpoint, so the git history doubles as progress tracking.
 
 ## Recent changes
 
-- **Public `/ai-agent-health` endpoint** (`3b865ee`). Root-level liveness/readiness probe modeled on the MCP server's `/mcp-health`: reports `storage` (LibSQL) and `mcpServer` (`{MCP_SERVER_URL}/mcp-health`), both amber/degraded when down — a dead process is the only red state. New `MCP_SERVER_URL` env var (default `http://localhost:4112`). See [Health probe](#health-probe).
+- **Public `/ai-agent-health` endpoint** (`3b865ee`). Root-level liveness/readiness probe modeled on the MCP server's `/mcp-health`: reports `storage` (LibSQL), amber/degraded when down — a dead process is the only red state. See [Health probe](#health-probe).
 - **Two-doored session auth for the embedded chat UI** (`3ab916b`). Added
   better-auth's `bearer()` plugin so the portal can pass a live session token
   via `?agentToken=*** the iframe URL, and normalized the `__Secure-` cookie

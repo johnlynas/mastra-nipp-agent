@@ -9,17 +9,12 @@
  * Dependency semantics (mirrors how the portal treats its PgBouncer pooler —
  * nice to have, the service keeps working without it):
  *   - storage:    the agent server's own LibSQL store → degraded when down
- *   - mcpServer:  the portal MCP server's /mcp-health → degraded when down
- *                 (the agent depends on it for portal tools, but the server
- *                 itself stays up and answering probes)
- *   - portal:     the NIPP portal's public /api/health → degraded when down
  *
  * A dead process is the only red state — the APM sees it as an unreachable
  * endpoint, not a JSON status. So this route answers 200 for healthy/degraded
  * and 503 only if we ever classify a check as critical (none currently).
  */
 import type { Mastra } from '@mastra/core/mastra';
-import type { AgentConfig } from './config';
 
 type CheckResult = {
   status: 'healthy' | 'unhealthy' | 'skipped';
@@ -34,8 +29,6 @@ export interface HealthResponse {
   uptime: number;
   checks: Record<string, CheckResult>;
 }
-
-const DEPENDENCY_TIMEOUT_MS = 5_000;
 
 /** Probe the agent server's LibSQL store with a trivial list query. */
 async function checkStorage(mastra: Mastra): Promise<CheckResult> {
@@ -55,91 +48,18 @@ async function checkStorage(mastra: Mastra): Promise<CheckResult> {
   }
 }
 
-/** Probe the portal MCP server's own public health endpoint (no auth). */
-async function checkMcpServer(mcpServerUrl: string): Promise<CheckResult> {
-  if (!mcpServerUrl) {
-    return { status: 'skipped', message: 'MCP server not configured' };
-  }
-  const start = Date.now();
-  try {
-    const res = await fetch(`${mcpServerUrl.replace(/\/+$/, '')}/mcp-health`, {
-      signal: AbortSignal.timeout(DEPENDENCY_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        const body = (await res.json()) as { status?: string };
-        detail = body.status ?? res.status;
-      } catch {
-        detail = res.status;
-      }
-      return {
-        status: 'unhealthy',
-        latency_ms: Date.now() - start,
-        error: `MCP server reported unhealthy (status ${detail})`,
-      };
-    }
-    return { status: 'healthy', latency_ms: Date.now() - start };
-  } catch (error) {
-    return {
-      status: 'unhealthy',
-      error: `MCP server unreachable (${error instanceof Error ? error.message : String(error)})`,
-    };
-  }
-}
-
-/** Probe the NIPP portal's own public health endpoint (no auth required). */
-async function checkPortal(portalUrl: string): Promise<CheckResult> {
-  if (!portalUrl) {
-    return { status: 'skipped', message: 'Portal not configured' };
-  }
-  const start = Date.now();
-  try {
-    const res = await fetch(`${portalUrl.replace(/\/+$/, '')}/api/health`, {
-      signal: AbortSignal.timeout(DEPENDENCY_TIMEOUT_MS),
-    });
-    if (!res.ok) {
-      let detail: unknown;
-      try {
-        const body = (await res.json()) as { status?: string };
-        detail = body.status ?? res.status;
-      } catch {
-        detail = res.status;
-      }
-      return {
-        status: 'unhealthy',
-        latency_ms: Date.now() - start,
-        error: `Portal reported unhealthy (status ${detail})`,
-      };
-    }
-    return { status: 'healthy', latency_ms: Date.now() - start };
-  } catch (error) {
-    return {
-      status: 'unhealthy',
-      error: `Portal unreachable (${error instanceof Error ? error.message : String(error)})`,
-    };
-  }
-}
-
 /** Run all health checks — returns current state only, no side effects. */
 export async function checkHealthStatus(
   mastra: Mastra,
-  config: AgentConfig,
 ): Promise<HealthResponse> {
-  const [storage, mcpServer, portal] = await Promise.all([
-    checkStorage(mastra),
-    checkMcpServer(config.mcpServerUrl),
-    checkPortal(config.portalUrl),
-  ]);
+  const storage = await checkStorage(mastra);
 
   // All dependencies are non-critical (amber) — the agent server process is up
   // and answering probes even if they fail. A dead process never reaches this code.
   const status: HealthResponse['status'] =
-    storage.status === 'unhealthy' || mcpServer.status === 'unhealthy' || portal.status === 'unhealthy'
-      ? 'degraded'
-      : 'healthy';
+    storage.status === 'unhealthy' ? 'degraded' : 'healthy';
 
-  const checks: Record<string, CheckResult> = { storage, mcpServer, portal };
+  const checks: Record<string, CheckResult> = { storage };
   if (status !== 'healthy') {
     console.warn(`[HEALTH] ${status}: ${JSON.stringify(checks)}`);
   }
