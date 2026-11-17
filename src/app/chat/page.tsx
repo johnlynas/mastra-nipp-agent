@@ -310,7 +310,7 @@ function SaveChatModal({
             disabled={!name.trim()}
             onClick={() => onSave(sanitizeMarkdownFilename(name))}
           >
-            Save .md
+            Save Chat
           </button>
         </div>
       </div>
@@ -388,6 +388,77 @@ export default function ChatPage() {
   // Search: which messages contain the query (case-insensitive, across text
   // parts and tool-block names/results). Drives dimming of non-matching rows.
   const q = query.trim().toLowerCase();
+
+  // Match navigation: the arrows in the search box step through the <mark>
+  // elements actually rendered in .chat-scroll (collapsed tool bodies don't
+  // count — only visible results do), so the DOM is the source of truth for
+  // both the match count and the scroll target.
+  const [matchCount, setMatchCount] = useState(0);
+  const [activeMatch, setActiveMatch] = useState(-1);
+  const prevQueryRef = useRef('');
+  const scrollNextRef = useRef(false);
+
+  const syncMatches = useCallback((queryChanged: boolean) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const marks = Array.from(root.querySelectorAll<HTMLElement>('mark'));
+    setMatchCount(marks.length);
+    setActiveMatch((prev) => {
+      if (marks.length === 0) return -1;
+      if (queryChanged) {
+        scrollNextRef.current = true; // new search → jump to first match
+        return 0;
+      }
+      return Math.min(prev, marks.length - 1); // clamp on content shrink
+    });
+  }, []);
+
+  useEffect(() => {
+    const changed = prevQueryRef.current !== query;
+    prevQueryRef.current = query;
+    syncMatches(changed);
+  }, [query, chat.messages, syncMatches]);
+
+  // Re-sync when the DOM changes underneath us (a tool block expands/collapses
+  // while a search is active). childList only — class toggles don't re-fire it.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    let raf = 0;
+    const obs = new MutationObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => syncMatches(false));
+    });
+    obs.observe(root, { childList: true, subtree: true });
+    return () => {
+      obs.disconnect();
+      cancelAnimationFrame(raf);
+    };
+  }, [syncMatches]);
+
+  // Mark the active match and scroll it into view when navigation happened.
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const marks = Array.from(root.querySelectorAll<HTMLElement>('mark'));
+    marks.forEach((m, i) => m.classList.toggle('mark-active', i === activeMatch));
+    if (scrollNextRef.current && activeMatch >= 0) {
+      scrollNextRef.current = false;
+      marks[activeMatch]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [activeMatch, matchCount]);
+
+  const stepMatch = useCallback(
+    (dir: 1 | -1) => {
+      if (matchCount === 0) return;
+      scrollNextRef.current = true;
+      setActiveMatch((prev) => {
+        const base = prev < 0 ? (dir === 1 ? -1 : 0) : prev;
+        return (((base + dir) % matchCount) + matchCount) % matchCount; // wrap
+      });
+    },
+    [matchCount],
+  );
 
   // Download the whole conversation as a markdown file (client-side blob).
   const downloadChatMarkdown = useCallback(
@@ -468,6 +539,35 @@ export default function ChatPage() {
             autoComplete="off"
             spellCheck={false}
           />
+          {matchCount > 0 && (
+            <>
+              <span className="chat-search-count" aria-live="polite">
+                {activeMatch >= 0 ? activeMatch + 1 : matchCount}/{matchCount}
+              </span>
+              <button
+                type="button"
+                className="chat-search-step"
+                aria-label="Previous match"
+                title="Previous match"
+                onClick={() => stepMatch(-1)}
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m18 15-6-6-6 6" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="chat-search-step"
+                aria-label="Next match"
+                title="Next match"
+                onClick={() => stepMatch(1)}
+              >
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+            </>
+          )}
         </div>
         <div className="chat-header-actions">
           <span className="chat-user">{auth.user.name ?? auth.user.email}</span>
@@ -476,7 +576,7 @@ export default function ChatPage() {
             className="btn btn-ghost btn-sm"
             onClick={() => setSaveOpen(true)}
           >
-            Save as .md
+            Save Chat
           </button>
         </div>
       </header>
