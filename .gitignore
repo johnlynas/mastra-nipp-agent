@@ -13,6 +13,11 @@ mastra.db
 mastra.db-shm
 mastra.db-wal
 
+# Agent workspace (runtime files the agent reads/writes — keep dir + seeds)
+workspace/*
+!workspace/README.md
+!workspace/notes.md
+
 # Prisma (generated client — schema.prisma is committed, generated/ is not)
 prisma/generated/
 
