@@ -200,6 +200,36 @@ main {
   appearance: none;
 }
 
+/* Match navigation — appears only while a search has visible results */
+.chat-search-count {
+  flex: none;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--slate-500);
+  white-space: nowrap;
+}
+
+.chat-search-step {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--slate-500);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.chat-search-step:hover {
+  color: var(--slate-800);
+  background: var(--slate-100);
+}
+
 /* Narrow screens: title + actions on one row, search full-width below */
 @media (max-width: 560px) {
   .chat-header {
@@ -246,6 +276,12 @@ mark {
   border-radius: 3px;
   background: rgba(245, 166, 35, 0.4);
   color: inherit;
+}
+
+/* The match the arrows are pointing at — same amber hue, full strength */
+mark.mark-active {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(245, 166, 35, 0.35);
 }
 
 /* Visually hidden — screen-reader-only labels */
