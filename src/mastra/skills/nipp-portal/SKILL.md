@@ -9,7 +9,7 @@ description: Use when answering questions about, or taking action in, the NIPP p
 
 NIPP is a multi-tenant property-management platform. Each customer organization ("tenant") manages its own properties (units), staff (users, teams, roles), calendars (viewings, inspections, lease signings…), work (work orders → quotations → invoices) and relationships with external contractors from a shared directory. All tenants live in one PostgreSQL database; isolation is enforced by row-level security keyed on the organization id. A special **Platform** organization hosts root-level administration: membership in it is what authorizes cross-tenant admin API calls, and platform-only features (the job scheduler) live there.
 
-This skill tells you how the portal's data fits together and how to chain your 15 domain tools to answer multi-entity questions accurately. For entity relationships, enum values, and lifecycle details not covered here, read `references/data-model.md`.
+This skill tells you how the portal's data fits together and how to chain your 15 domain tools to answer multi-entity questions accurately. For per-field schemas (types, defaults, nullability), enum values, state-machine rules, and isolation semantics, read `references/data-model.md`.
 
 ## 2. The 15 domain tools at a glance
 
@@ -55,7 +55,19 @@ Choosing admin vs tenant actions:
 
 When an admin-scope call fails with 401/403, the caller likely lacks Platform-org membership — report that plainly; do not retry with altered parameters.
 
-## 4. Cross-tool query workflow
+## 4. Data model quick reference (gotchas that change how you query)
+
+Full per-field schemas and enum values: `references/data-model.md`. The essentials:
+
+- **PK naming** — these tables do NOT use `id`: `WorkOrder.workOrderId`, `Quotation.quoteId`, `Invoice.invoiceId`, `Units.unitId`, `Contractors.contractorId`. Use the right key when passing ids between tools.
+- **Logical links (no FK, joins are manual):** `User.activeOrganizationId` → Organization (the org a call defaults to when `orgId` is omitted; membership truth lives in Member); `CalendarEvent.propertyId` → Units (nullable — general events have no property); `WorkOrder.openedById` / `WorkOrderNote.createdById` → User.
+- **Auto-behaviors:** recording a quotation `price` auto-advances the work order to QUOTES_IN; payment completion drives it to FINISHED; joining a team grants that team's roles (TeamRole inheritance); the quotesDue overdue alert fires at most once per work order (`deadlineAlertAt`).
+- **Work-order state machine** (only these transitions are legal — `work_orders.transition` rejects anything else): CREATED → OUT_FOR_QUOTES → QUOTES_IN → CONTRACTOR_ASSIGNED → STARTED → COMPLETE → INVOICED → FINISHED, plus CREATED → CLOSED (early closure pre-assignment). `contractorId` is null until CONTRACTOR_ASSIGNED; Invoice is strictly 1:1 with the work order.
+- **Key enums:** WorkOrderState (9 values above), QuotationState OPENED/ACCEPTED/REJECTED/CLOSED, OrgStatus PENDING/ACTIVE/SUSPENDED/ARCHIVED, UnitType HOUSE/APARTMENT/OTHER, ContractorType (PAINTER, ELECTRICIAN, PLUMBER, GAS_ENGINEER, LIFT_MAINTENANCE, GARDENER, ACCOUNTANT, FIRE_ALARMS, SOLICITOR, ROOFER, WINDOW_CLEANER, OTHER), CalendarEventType (VIEWING, INSPECTION, MAINTENANCE, LEASE_SIGNING, LEASE_RENEWAL, KEY_EXCHANGE, OTHER).
+- **Uniqueness:** one Member per (user, org); one Quotation per (work order, contractor) — a contractor bids once per job; Invoice 1:1 with work order.
+- **Org lifecycle** (`org.set_status`): PENDING → ACTIVE (first admin accepts invite) → SUSPENDED → ARCHIVED (terminal). Suspension invalidates all member sessions; creation auto-bootstraps 7 default roles + slug; role deletion needs confirmation when members are assigned, and `isDefault` roles are protected. Full rules: `references/org-lifecycle.md`.
+
+## 5. Cross-tool query workflow
 
 When a question spans more than one tool:
 
@@ -65,11 +77,17 @@ When a question spans more than one tool:
 4. **Joins are manual.** The API doesn't join entities — collect IDs from one tool's result and pass them into the next (e.g., work order → its quotes via the work-order id; user → their roles via member/role lookups).
 5. **Paginate responsibly.** `pageSize` 20 by default; fetch further pages only when the user asks for exhaustive totals or exports, and say so when you stop early.
 6. **Platform-wide questions cost N+1.** "How many units does each tenant have?" = `org.list`, then one call per tenant — do it, but state how many tenants you checked and summarize in a table.
-7. **Summarize, don't dump.** Report counts + key fields; hide raw UUIDs unless the user needs them (ids are fine when they'll act on them).
+7. **Summarize, don't dump.** Display rules: §6.
 8. **Partial failure.** If one call in a chain fails, report what succeeded plus the exact error from the failed step — don't silently drop it or retry blindly.
 
 
-## 5. Few-shot examples
+## 6. Displaying results
+
+- **Tables by default for multiple rows.** Render any multi-row result as a markdown table; fall back to a compact list only when a table won't fit (very wide fields, few columns of interest).
+- **No ids or slugs in normal output.** Never display primary keys, foreign-key values (UUIDs/cuids), or slug fields (`Organization.slug`, `Team.slug`) unless the user explicitly asks for raw data. When a row contains an id referencing another table (`teamId`, `roleId`, `permissionId`, `contractorId`, `calendarId`, …), resolve it — fetch the referenced record and show its human-readable name (team name, role name, permission key like `properties:view`, contractor company name).
+- **Human-readable by default.** Report counts + meaningful fields in plain language; return raw data (ids, JSON blobs, timestamps verbatim) only when the user asks for it.
+
+## 7. Few-shot examples
 
 **A. Tenant lookup + filtered list**
 "Show me open work orders for Test Tenant."
@@ -101,7 +119,7 @@ When a question spans more than one tool:
 2. Group by user + action; summarize the top changes with timestamps.
 
 
-## 6. Edge cases & fallbacks
+## 8. Edge cases & fallbacks
 
 1. **Ambiguous name matches.** If a search returns several candidates, ask the user which one they mean before running downstream queries — never pick silently.
 2. **Empty results.** State the exact filters applied (org scope, state, date range) so the user knows why nothing matched. Remember §3 point 3: empty can mean the wrong tenant was queried, not that data is missing.
