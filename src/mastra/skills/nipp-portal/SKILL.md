@@ -65,6 +65,7 @@ Full per-field schemas and enum values: `references/data-model.md`. The essentia
 - **Work-order state machine** (only these transitions are legal — `work_orders.transition` rejects anything else): CREATED → OUT_FOR_QUOTES → QUOTES_IN → CONTRACTOR_ASSIGNED → STARTED → COMPLETE → INVOICED → FINISHED, plus CREATED → CLOSED (early closure pre-assignment). `contractorId` is null until CONTRACTOR_ASSIGNED; Invoice is strictly 1:1 with the work order.
 - **Key enums:** WorkOrderState (9 values above), QuotationState OPENED/ACCEPTED/REJECTED/CLOSED, OrgStatus PENDING/ACTIVE/SUSPENDED/ARCHIVED, UnitType HOUSE/APARTMENT/OTHER, ContractorType (PAINTER, ELECTRICIAN, PLUMBER, GAS_ENGINEER, LIFT_MAINTENANCE, GARDENER, ACCOUNTANT, FIRE_ALARMS, SOLICITOR, ROOFER, WINDOW_CLEANER, OTHER), CalendarEventType (VIEWING, INSPECTION, MAINTENANCE, LEASE_SIGNING, LEASE_RENEWAL, KEY_EXCHANGE, OTHER).
 - **Uniqueness:** one Member per (user, org); one Quotation per (work order, contractor) — a contractor bids once per job; Invoice 1:1 with work order.
+- **Org lifecycle** (`org.set_status`): PENDING → ACTIVE (first admin accepts invite) → SUSPENDED → ARCHIVED (terminal). Suspension invalidates all member sessions; creation auto-bootstraps 7 default roles + slug; role deletion needs confirmation when members are assigned, and `isDefault` roles are protected. Full rules: `references/org-lifecycle.md`.
 
 ## 5. Cross-tool query workflow
 
