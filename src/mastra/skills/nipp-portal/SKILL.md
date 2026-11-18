@@ -67,7 +67,17 @@ Full per-field schemas and enum values: `references/data-model.md`. The essentia
 - **Uniqueness:** one Member per (user, org); one Quotation per (work order, contractor) — a contractor bids once per job; Invoice 1:1 with work order.
 - **Org lifecycle** (`org.set_status`): PENDING → ACTIVE (first admin accepts invite) → SUSPENDED → ARCHIVED (terminal). Suspension invalidates all member sessions; creation auto-bootstraps 7 default roles + slug; role deletion needs confirmation when members are assigned, and `isDefault` roles are protected. Full rules: `references/org-lifecycle.md`.
 
-## 5. Cross-tool query workflow
+## 5. Organization & team operations
+
+Shape: an organization can have many teams; each team has multiple users (a user may belong to several teams).
+
+- **Creating an org** (`org.create`): collect `name` and `description` first — both are required. Take them from the user's prompt; if either is missing, ask the user for it. Never create with placeholder or invented values.
+- **Reading/updating an org** (`org.get`, `org.update`): always pass the explicit `orgId` of the organization you want to work on — never leave `orgId` empty. An omitted/empty `orgId` falls back to the signed-in user's active org (or Platform), so you would silently operate on the wrong tenant. If the user names the org, resolve it with `org.search` first.
+- **Changing an org's status** (`org.set_status`): always ask for the user's explicit approval before executing — suspension invalidates every member session and ARCHIVED is irreversible (see `references/org-lifecycle.md`).
+- **Creating a team** (`team.create`): needs the team `name`, the team `description`, and the target organization's `orgId`. If any of these are not in the prompt, ask the user. If the user gives an org *name* instead of an id, search the organizations table (`org.search`) for a match to get the `orgId`; if several candidates come back, confirm which one before creating.
+- **Updating/deleting a team** (`team.update`, `team.delete`): always ask the user's permission first. Before deleting, check the team's members — if it contains users, surface who they are and get explicit confirmation (deletion cascades memberships).
+
+## 6. Cross-tool query workflow
 
 When a question spans more than one tool:
 
@@ -77,17 +87,17 @@ When a question spans more than one tool:
 4. **Joins are manual.** The API doesn't join entities — collect IDs from one tool's result and pass them into the next (e.g., work order → its quotes via the work-order id; user → their roles via member/role lookups).
 5. **Paginate responsibly.** `pageSize` 20 by default; fetch further pages only when the user asks for exhaustive totals or exports, and say so when you stop early.
 6. **Platform-wide questions cost N+1.** "How many units does each tenant have?" = `org.list`, then one call per tenant — do it, but state how many tenants you checked and summarize in a table.
-7. **Summarize, don't dump.** Display rules: §6.
+7. **Summarize, don't dump.** Display rules: §7.
 8. **Partial failure.** If one call in a chain fails, report what succeeded plus the exact error from the failed step — don't silently drop it or retry blindly.
 
 
-## 6. Displaying results
+## 7. Displaying results
 
 - **Tables by default for multiple rows.** Render any multi-row result as a markdown table; fall back to a compact list only when a table won't fit (very wide fields, few columns of interest).
 - **No ids or slugs in normal output.** Never display primary keys, foreign-key values (UUIDs/cuids), or slug fields (`Organization.slug`, `Team.slug`) unless the user explicitly asks for raw data. When a row contains an id referencing another table (`teamId`, `roleId`, `permissionId`, `contractorId`, `calendarId`, …), resolve it — fetch the referenced record and show its human-readable name (team name, role name, permission key like `properties:view`, contractor company name).
 - **Human-readable by default.** Report counts + meaningful fields in plain language; return raw data (ids, JSON blobs, timestamps verbatim) only when the user asks for it.
 
-## 7. Few-shot examples
+## 8. Few-shot examples
 
 **A. Tenant lookup + filtered list**
 "Show me open work orders for Test Tenant."
@@ -118,8 +128,14 @@ When a question spans more than one tool:
 1. `system.audit_logs` with matching filters (`resourceType`, page through recent entries).
 2. Group by user + action; summarize the top changes with timestamps.
 
+**F. Org/team creation (collect required fields first)**
+"Create a team called Electricals in Test Tenant."
+1. User named an org, not an id: `org.search` `{ search: "Test Tenant" }` → `orgId` (confirm if several candidates).
+2. Check the prompt for team `name` + `description`; ask the user for anything missing — never create with placeholders.
+3. `team.create` `{ orgId, name: "Electricals", description: <from prompt> }`; relay the result.
 
-## 8. Edge cases & fallbacks
+
+## 9. Edge cases & fallbacks
 
 1. **Ambiguous name matches.** If a search returns several candidates, ask the user which one they mean before running downstream queries — never pick silently.
 2. **Empty results.** State the exact filters applied (org scope, state, date range) so the user knows why nothing matched. Remember §3 point 3: empty can mean the wrong tenant was queried, not that data is missing.

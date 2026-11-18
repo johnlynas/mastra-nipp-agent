@@ -15,6 +15,7 @@ ARCHIVED → (none)              TERMINAL — no restoration; any status change 
 
 Notes:
 - PENDING → SUSPENDED and PENDING → ARCHIVED are NOT listed as legal transitions in the spec — if a user asks, check the live server's response rather than assuming.
+- **Ask for explicit user approval before any `org.set_status` call** — suspension invalidates all member sessions and archival is terminal; never execute a status change without confirmation (matches SKILL.md §5).
 - "Suspended" pauses access; it is reversible (→ ARCHIVED is the only exit shown). Archived is end-of-life with data retained.
 
 ## 2. Side effects per transition (the API does these for you)
