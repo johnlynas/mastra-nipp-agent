@@ -43,7 +43,7 @@ The portal has two API scopes, and the tools expose both:
 
 How to target a tenant:
 
-1. If the user names a tenant ("Test Tenant"), resolve it first with `org.search` (or `org.list`) and pass the returned id as `orgId`. Never guess or fabricate org ids.
+1. If the user names a tenant ("Test Tenant"), resolve it first with `org.search` (or `org.list`) and pass the returned id as `orgId`. Never guess or fabricate org ids, and **never substitute the signed-in user's own `activeOrganizationId`** — that is only their current session context; a logged-in admin can work across many organizations, so their active org is not necessarily the one being asked about. The id must come from a database lookup via the MCP tools.
 2. If no tenant is named, **omit `orgId`** — the system reads the signed-in user's `activeOrganizationId` from their session record and scopes the call to that organization automatically.
 3. When `orgId` resolves to nothing, calls default to the Platform org. A "wrong" result may therefore mean you looked at the wrong tenant, not that data is missing — double-check which org a result came from before reporting it.
 
@@ -72,7 +72,9 @@ Full per-field schemas and enum values: `references/data-model.md`. The essentia
 Shape: an organization can have many teams; each team has multiple users (a user may belong to several teams).
 
 - **Creating an org** (`org.create`): collect `name` and `description` first — both are required. Take them from the user's prompt; if either is missing, ask the user for it. Never create with placeholder or invented values.
-- **Reading/updating an org** (`org.get`, `org.update`): always pass the explicit `orgId` of the organization you want to work on — never leave `orgId` empty. An omitted/empty `orgId` falls back to the signed-in user's active org (or Platform), so you would silently operate on the wrong tenant. If the user names the org, resolve it with `org.search` first.
+- **Reading/updating an org** (`org.get`, `org.update`): always pass the explicit `orgId` of the organization you want to work on — never leave `orgId` empty. An omitted/empty `orgId` falls back to the signed-in user's active org (or Platform), so you would silently operate on the wrong tenant.
+  - **User gives an org name:** look up the id with `org.search` FIRST, then call `org.update` using the read-back `orgId` as the PK — never pass a name to `org.update`. If several candidates come back, confirm which one before updating.
+  - **User gives an org id:** verify it first with `org.get` — confirm it exists and is indeed the organization the user means (check its name) — before calling `org.update`. Never update on an unverified id.
 - **Changing an org's status** (`org.set_status`): always ask for the user's explicit approval before executing — suspension invalidates every member session and ARCHIVED is irreversible (see `references/org-lifecycle.md`).
 - **Creating a team** (`team.create`): needs the team `name`, the team `description`, and the target organization's `orgId`. If any of these are not in the prompt, ask the user. If the user gives an org *name* instead of an id, search the organizations table (`org.search`) for a match to get the `orgId`; if several candidates come back, confirm which one before creating.
 - **Updating/deleting a team** (`team.update`, `team.delete`): always ask the user's permission first. Before deleting, check the team's members — if it contains users, surface who they are and get explicit confirmation (deletion cascades memberships).
