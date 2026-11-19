@@ -23,12 +23,31 @@ const ACTION_MAP: Record<string, string> = {
   t_set_status: 'org_status_status_dash',
 };
 
+/**
+ * The path-param name each action's endpoint expects for the target org id.
+ * The portal is inconsistent: GET/PATCH/DELETE /api/admin/organizations/{orgId}
+ * use `orgId`, while the status endpoint and every dashboard endpoint use `id`.
+ * The generated MCP tools only accept their real path param, so dispatch() drops
+ * any other name — passing `id` to an admin get/update silently targeted the
+ * Platform org (the x-org-id default). We normalize here: whichever of `id` /
+ * `orgId` the model passed becomes the endpoint's expected param.
+ */
+const TARGET_PARAM: Record<string, string> = {
+  get: 'orgId',
+  update: 'orgId',
+  delete: 'orgId',
+  set_status: 'id',
+  t_get: 'id',
+  t_update: 'id',
+  t_set_status: 'id',
+};
+
 export const orgTool = createTool({
   id: 'org',
   description:
     'Manage organizations (tenants) in the NIPP portal. Admin actions: list, get, create, update, delete, set_status (change status), search, list_members, list_roles. ' +
     'Tenant-scoped variants prefixed t_ (t_list, t_get, t_create, t_update, t_set_status). ' +
-    'For most actions `id` is the target org; for t_get/t_update/t_set_status `id` is the tenant org itself. Omit orgId to act on the caller\'s active organization.',
+    'For get/update/delete/set_status and the t_ read/write actions, pass the target org id as `id` (or `orgId` — both are accepted and normalized per endpoint). Omit orgId to act on the caller\'s active organization.',
   inputSchema: z.object({
     action: z.enum(['list', 'get', 'create', 'update', 'delete', 'set_status', 'search', 'list_members', 'list_roles', 't_list', 't_get', 't_create', 't_update', 't_set_status']),
     orgId: z.string().optional(),
@@ -47,6 +66,13 @@ export const orgTool = createTool({
   execute: async (input, options) => {
     const toolId = ACTION_MAP[input.action];
     if (!toolId) return { success: false, error: `Unknown org action '${input.action}'.` };
-    return callMcpTool(toolId, input as Record<string, unknown>, { requestContext: options?.requestContext as RequestContextLike | undefined });
+    // Normalize the target-org id to the endpoint's expected path-param name.
+    const targetParam = TARGET_PARAM[input.action];
+    let payload = input as Record<string, unknown>;
+    if (targetParam && payload[targetParam] === undefined && payload.id !== undefined) {
+      payload = { ...payload, [targetParam]: payload.id };
+      delete payload.id;
+    }
+    return callMcpTool(toolId, payload, { requestContext: options?.requestContext as RequestContextLike | undefined });
   },
 });
