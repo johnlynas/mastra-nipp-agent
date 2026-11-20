@@ -19,7 +19,7 @@
           "org_update_admin"
         ],
         "delete": [
-          "org_delete"
+          "org_delete_dash"
         ],
         "set_status": [
           "org_status_status_admin"
@@ -59,7 +59,8 @@
         "org_roles_roles": "GET single org role \u2014 use list_roles + filter",
         "org_roles_update": "PATCH org role \u2014 v2 (role tool covers platform roles)",
         "org_roles_delete": "DELETE org role \u2014 v2",
-        "org_settings_settings": "GET org settings \u2014 v2 read-only detail"
+        "org_settings_settings": "GET org settings \u2014 v2 read-only detail",
+        "org_delete_admin": "DELETE /api/admin/organizations/{orgId} \u2014 soft delete (archives; hard-deletes only PENDING). Use the dashboard delete for real removal."
       }
     },
     "user": {
