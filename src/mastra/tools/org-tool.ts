@@ -11,7 +11,11 @@ const ACTION_MAP: Record<string, string> = {
   get: 'org_get_admin',
   create: 'org_create_admin',
   update: 'org_update_admin',
-  delete: 'org_delete',
+  // Hard delete (member check, Platform-org protection) lives on the
+  // dashboard endpoint; the admin one only archives. The bare `org_delete`
+  // id no longer exists — it was renamed to org_delete_admin/_dash when the
+  // dashboard DELETE landed in the spec.
+  delete: 'org_delete_dash',
   set_status: 'org_status_status_admin',
   search: 'org_search_list',
   list_members: 'org_members_list',
@@ -25,8 +29,9 @@ const ACTION_MAP: Record<string, string> = {
 
 /**
  * The path-param name each action's endpoint expects for the target org id.
- * The portal is inconsistent: GET/PATCH/DELETE /api/admin/organizations/{orgId}
- * use `orgId`, while the status endpoint and every dashboard endpoint use `id`.
+ * The portal is inconsistent: GET/PATCH /api/admin/organizations/{orgId}
+ * use `orgId`, while the status endpoint and every dashboard endpoint use `id`
+ * (delete now maps to the dashboard hard-delete, so it takes `id` too).
  * The generated MCP tools only accept their real path param, so dispatch() drops
  * any other name — passing `id` to an admin get/update silently targeted the
  * Platform org (the x-org-id default). We normalize here: whichever of `id` /
@@ -35,7 +40,7 @@ const ACTION_MAP: Record<string, string> = {
 const TARGET_PARAM: Record<string, string> = {
   get: 'orgId',
   update: 'orgId',
-  delete: 'orgId',
+  delete: 'id',
   set_status: 'id',
   t_get: 'id',
   t_update: 'id',
