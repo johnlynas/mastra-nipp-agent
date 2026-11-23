@@ -11,6 +11,16 @@ NIPP is a multi-tenant property-management platform. Each customer organization 
 
 This skill tells you how the portal's data fits together and how to chain your 15 domain tools to answer multi-entity questions accurately. For per-field schemas (types, defaults, nullability), enum values, state-machine rules, and isolation semantics, read `references/data-model.md`.
 
+## Scope selection rule (read before any portal call)
+
+Which API scope to use is determined by the signed-in user's Platform membership:
+
+**How to determine admin vs tenant:** Do NOT use MCP session team information to derive whether a user is an admin or a tenant user. Read the portal user login session's team to get what permissions the user has: if they are in the platform team, they are admin users; any other team is a tenant user.
+
+1. **Platform member** — if the logged-in user IS a member of the Platform organization, use the **platform-scoped** (admin) REST endpoints for working with the portal. These permit cross-tenant reads and writes across all organizations.
+2. **Tenant user** — if the logged-in user is NOT a member of the Platform organization (i.e., they belong to a tenant organization), use the **tenant-scoped** (`t_*`) API endpoints for accessing the portal. Tenant-scoped endpoints enforce membership in the target org and return 403 `Not a member of this organization` for any org the user is not a member of — do not work around that by switching to platform-scoped calls; report the 403 plainly (see §9).
+3. **Enforce it, even on request.** A tenant user must NOT be given access to platform-scoped REST endpoints, even if they explicitly ask for them. They are restricted to tenant-scoped endpoints only. If a tenant user asks for platform-level access (e.g., "show me all tenants", "list users across every org"), respond with a warning that they have no access to the platform APIs and cannot be granted it — do not attempt the call, do not switch scopes, and do not offer workarounds.
+
 ## 2. The 15 domain tools at a glance
 
 Each tool takes an `action` (an enum) plus optional parameters; the tool's description lists every valid action and its required fields — only use actions that exist, never invent one. All tools accept optional `orgId` (tenant targeting, see §3), `page`, and `pageSize`.
