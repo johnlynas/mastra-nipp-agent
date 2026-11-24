@@ -5,16 +5,16 @@
 **Goal:** A tenant user's tool calls reach the portal with their own bearer token; admin-scoped calls by non-admins now fail at portal RBAC (403) instead of silently succeeding as super-admin.
 
 **Exit criteria:**
-- [ ] Integration smoke: tenant token → `wo_list` returns their org's data; tenant token → `user_list_admin` returns 403 from the portal.
-- [ ] Platform admin token → `user_list_admin` returns 200.
-- [ ] No-token calls still work via service fallback (legacy).
-- [ ] Agent repo: `npm run test`, `npm run typecheck`, `npm run build` green. MCP repo: new `npm test` + `npm run type-check` green.
+- [x] Integration smoke: tenant token → `wo_list` returns their org's data; tenant token → `user_list_admin` returns 403 from the portal.
+- [x] Platform admin token → `user_list_admin` returns 200.
+- [x] No-token calls still work via service fallback (legacy).
+- [x] Agent repo: `npm run test`, `npm run typecheck`, `npm run build` green. MCP repo: new `npm test` + `npm run type-check` green.
 
 ---
 
 ## Part A — MCP server (mastra-nipp-mcp)
 
-### Task 1: Test infra for the MCP repo
+### Task 1: Test infra for the MCP repo ✅ DONE (commit `328e5c3`)
 
 **Objective:** The MCP repo has no test runner; add vitest so Tasks 2–5 are TDD-able.
 
@@ -57,7 +57,10 @@ describe('loadConfig', () => {
 
 ---
 
-### Task 2: `verifyCaller()` — token verification + cache (MCP side)
+### Task 2: `verifyCaller()` — token verification + cache (MCP side) ✅ DONE (commit `ddf65ac`)
+
+Live gate (Step 5) verified against the docker test stack via `scripts/probe-verify-caller.ts`:
+admin → `{isPlatformAdmin:true}`, tenant → `{isPlatformAdmin:false, orgId set}`, bogus token → `null` — GATE PASS.
 
 **Objective:** Verify a portal session token and resolve caller identity (`userId`, `activeOrganizationId`, `isPlatformAdmin`), with a short-TTL cache.
 
@@ -153,7 +156,7 @@ Notes: `mcpAuth` uses the `bearer()` plugin (same as agent) so `getSession({ hea
 
 ---
 
-### Task 3: `PortalClient` per-request token
+### Task 3: `PortalClient` per-request token ✅ DONE (commit `86ecc09`)
 
 **Objective:** `client.request()` forwards a caller-supplied bearer token when provided; falls back to service sign-in only when none is given.
 
@@ -226,7 +229,7 @@ In `doRequest`, build the header from `opts.bearerToken ?? this.token` (a caller
 
 ---
 
-### Task 4: Generated tools read the caller from requestContext
+### Task 4: Generated tools read the caller from requestContext ✅ DONE (commit `0b35af3`)
 
 **Objective:** Every generated tool's `execute` resolves the verified caller and passes its token to `client.request`; missing caller → legacy fallback (Phase 1) with a warning.
 
@@ -275,7 +278,7 @@ it('falls back (no token) when context has no caller', async () => {
 
 ---
 
-### Task 5: Server-side token capture + config flags
+### Task 5: Server-side token capture + config flags ✅ DONE (commit `0b35af3`)
 
 **Objective:** Ensure the incoming `Authorization` header is available to tools per request; add env flags to `config.ts`.
 
@@ -290,7 +293,7 @@ it('falls back (no token) when context has no caller', async () => {
 
 ## Part B — Agent (mastra-nipp-agent)
 
-### Task 6: Chat route sets the session token in requestContext
+### Task 6: Chat route sets the session token in requestContext ✅ DONE (agent commit `69e00b5`)
 
 **Objective:** `/api/chat` puts the caller's portal session token into `requestContext` under `mastra__portalSessionToken`.
 
@@ -313,7 +316,9 @@ it('returns the session cookie value for the cookie door', async () => {
 
 ---
 
-### Task 7: Dispatch carries the token to the MCP client
+### Task 7: Dispatch carries the token to the MCP client ✅ DONE (agent commit `69e00b5`)
+
+Shipped path: dispatch passes the tool call's `requestContext` into the MCP client tool's `execute` (was `undefined`), so `@mastra/mcp` runs the call in an operation scope and the transport fetch hook receives it — no AsyncLocalStorage needed.
 
 **Objective:** `callMcpTool` reads `mastra__portalSessionToken` from requestContext and makes it available to the MCP transport fetch hook (Task 8) — via an AsyncLocalStorage or a per-call option threaded through `execute`.
 
@@ -336,7 +341,7 @@ If (and only if) the probe shows the fetch hook's requestContext is `null` for t
 
 ---
 
-### Task 8: MCPClient custom fetch injects Authorization
+### Task 8: MCPClient custom fetch injects Authorization ✅ DONE (agent commit `69e00b5`)
 
 **Objective:** Every outbound MCP request carries the caller's token.
 
@@ -379,14 +384,17 @@ export const portalMcp = new MCPClient({
 
 ## Part C — Phase 1 validation & commit
 
-### Task 9: Full validation pass
+### Task 9: Full validation pass ✅ DONE (2026-11-24)
 
-1. `mastra-nipp-agent`: `npm run test && npm run typecheck && npm run build` → all green.
-2. `mastra-nipp-mcp`: `npm test && npm run type-check && npm run build` → all green.
-3. Integration smoke (docker test stack, `.env.test` ports): the four scenarios in the exit criteria above; capture the actual status codes into a short note appended to this file's "Run log" section below.
-4. Final commit: `feat(authz): per-request user token propagation (phase 1)`.
-
-**Run log:** _(fill during execution)_
+**Run log:**
+- `mastra-nipp-agent`: `npm run test` → 7 files / 54 tests PASS; `npm run typecheck` → clean; `npm run build` → green.
+- `mastra-nipp-mcp`: `npm test` → 4 files / 20 tests PASS; `npm run type-check` → clean; `npm run build` → "Build successful".
+- Integration smoke (`scripts/smoke-phase1.ts`, live MCP dev server :4112 + portal :3000, commit `05a16c2`): **SMOKE PASS (4/4)**
+  - tenant token → `wo_organizations_work_orders_list` (own org) → **200**, scoped data
+  - tenant token → `user_list_admin` → **403** from portal RBAC
+  - admin token → `user_list_admin` → **200**
+  - no token → `user_list_admin` → **200** via legacy service fallback
+- Fixture fix found during smoke: the probe tenant had no `Member` row in its active org, so the portal correctly 403'd the tenant-scoped work-order route; smoke script now upserts the membership idempotently.
 
 ---
 
