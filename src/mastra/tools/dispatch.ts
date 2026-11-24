@@ -210,7 +210,11 @@ export async function callMcpTool(
   }
 
   try {
-    const raw = await entry.handle.execute(filtered, undefined);
+    // Pass the tool call's requestContext to the MCP client tool: it runs the
+    // call inside an operation scope, so the transport fetch hook (portalMcpFetch
+    // in src/mastra/mcp/client.ts) receives it and injects the caller's portal
+    // session token as Authorization on every outbound MCP request (phase 1).
+    const raw = await entry.handle.execute(filtered, { requestContext: opts.requestContext });
     return extractPayload(raw);
   } catch (e) {
     return normalizeError(e);

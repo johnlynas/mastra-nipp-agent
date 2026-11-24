@@ -29,6 +29,13 @@ export interface PortalSessionUser {
   id: string;
   name?: string;
   email?: string;
+  /**
+   * The caller's portal session token (bearer). Server-side only — never sent
+   * to the browser. Phase 1 MCP authz: /api/chat puts it in requestContext as
+   * `mastra__portalSessionToken` so every MCP tool call executes under the
+   * calling user's own portal session, not the MCP server's service account.
+   */
+  sessionToken?: string;
 }
 
 /** Read a single cookie value from a raw `Cookie:` header (null if absent). */
@@ -65,6 +72,16 @@ export async function getPortalSessionUser(
 ): Promise<PortalSessionUser | null> {
   const headers = new Headers(req.headers);
 
+  // Phase 1 MCP authz: capture the caller's raw session token from whichever
+  // door is carrying it (bearer header value, or the session cookie value).
+  // It rides along in requestContext and reaches the MCP transport fetch hook.
+  let sessionToken = '';
+  const bearerHeader = headers.get('authorization');
+  if (bearerHeader) {
+    const m = bearerHeader.match(/^Bearer\s+(.+)$/i);
+    if (m?.[1]) sessionToken = m[1].trim();
+  }
+
   // Cookie-name normalization (door 2 above) — only when the bearer door is
   // not already carrying the session. The web Request has no .cookies, so read
   // the raw Cookie header directly.
@@ -74,6 +91,8 @@ export async function getPortalSessionUser(
     if (secureCookie && !parseCookieValue(cookieHeader, 'better-auth.session_token')) {
       headers.set('cookie', `better-auth.session_token=${secureCookie}`);
     }
+    sessionToken =
+      parseCookieValue(headers.get('cookie') ?? '', 'better-auth.session_token') ?? '';
   }
 
   let result: { user?: { id: string; name?: string; email?: string } } | null = null;
@@ -97,5 +116,5 @@ export async function getPortalSessionUser(
     return null; // fail closed, same as authorizeUser
   }
 
-  return { id: user.id, name: user.name, email: user.email };
+  return { id: user.id, name: user.name, email: user.email, sessionToken: sessionToken || undefined };
 }

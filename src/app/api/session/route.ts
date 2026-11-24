@@ -12,5 +12,7 @@ import { getPortalSessionUser } from '@/lib/auth-client';
 export async function GET(req: Request) {
   const user = await getPortalSessionUser(req);
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  return NextResponse.json({ user });
+  // sessionToken is server-side only (MCP authz) — never expose it to the browser.
+  const { sessionToken: _sessionToken, ...safeUser } = user;
+  return NextResponse.json({ user: safeUser });
 }

@@ -47,6 +47,11 @@ export async function POST(req: Request) {
   // Trusted context built from the verified session — never from the body.
   const requestContext = new RequestContext();
   requestContext.set('mastra__resourceId', user.id);
+  // Phase 1 MCP authz: the caller's portal session token rides along in the
+  // tool call context; the MCP transport fetch hook (src/mastra/mcp/client.ts)
+  // injects it as Authorization on every request to the MCP server, which then
+  // forwards it to the portal under THIS user's session.
+  requestContext.set('mastra__portalSessionToken', user.sessionToken ?? '');
 
   const stream = await handleChatStream({
     mastra,

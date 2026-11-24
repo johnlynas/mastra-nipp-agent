@@ -24,13 +24,20 @@ describe('org tool — target org id normalization', () => {
   it.each([
     ['get', 'orgId'],
     ['update', 'orgId'],
-    ['delete', 'orgId'],
   ])('admin %s: `id` is rewritten to `%s` (the endpoint path param)', async (action, target) => {
     calls.length = 0;
     const [toolId, payload] = await run({ action, id: 'org-123' });
-    expect(toolId).toBe(action === 'delete' ? 'org_delete' : `org_${action}_admin`);
+    expect(toolId).toBe(`org_${action}_admin`);
     expect(payload[target]).toBe('org-123');
     expect(payload.id).toBeUndefined();
+  });
+
+  it('admin delete: `id` stays `id` (dashboard hard-delete endpoint uses {id})', async () => {
+    calls.length = 0;
+    const [toolId, payload] = await run({ action: 'delete', id: 'org-123' });
+    expect(toolId).toBe('org_delete_dash');
+    expect(payload.id).toBe('org-123');
+    expect(payload.orgId).toBeUndefined();
   });
 
   it.each([
