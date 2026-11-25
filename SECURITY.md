@@ -21,3 +21,35 @@ Findings that cannot be fixed without breaking changes, or for which no patched 
 - `readdir-glob → minimatch` → `^11.0.1` (fixes GHSA-g3hv-75wg-m249; readdir-glob 3.0.0 declares `minimatch ^10`).
 
 Drop each override once the upstream chain publishes compatible ranges.
+
+## Per-request user authorization (MCP authz)
+
+The agent verifies the caller's portal session on **every** chat request and
+propagates that identity to the portal MCP server, so no tool call runs under a
+shared admin session. Design doc: `.hermes/plans/2026-11-23_234507-mcp-per-user-authz.md`.
+
+### What this repo guarantees
+
+- **Session verified per request** — `getPortalSessionUser()` (BetterAuth
+  bearer + shared `BETTER_AUTH_SECRET` + shared PostgreSQL) resolves the caller
+  from the cookie/bearer on `/api/chat`; banned users and DB errors fail closed.
+- **Token never from the client body** — the session token is read only from
+  the verified auth header/cookie, then placed in requestContext as
+  `mastra__portalSessionToken`.
+- **Per-request transport auth** — `portalMcpFetch` (`src/mastra/mcp/client.ts`)
+  injects `Authorization: Bearer *** user's token>` on every MCP request.
+- **Role-filtered dispatch** — `mastra__callerIsAdmin` is set per request;
+  `callMcpTool()` blocks admin-scoped tool ids (`ADMIN_TOOL_IDS`,
+  `src/mastra/tools/admin-tools.ts`) for non-admin callers with a 403-shaped
+  refusal before the MCP transport. Defense in depth — the MCP server's own
+  scope gate is authoritative.
+
+### What this repo delegates
+
+- **MCP server** (`mastra-nipp-mcp`): token verification, the admin scope gate
+  (403 for non-admins on `_admin` tools), per-caller `tools/list` filtering,
+  per-call audit logging, and the no-token 401 default. See its `SECURITY.md`.
+- **Portal** (`nipp-0111`): final authority — `requirePermission` + Postgres
+  RLS under the non-owner `nipp_app` role re-check every call independently of
+  both agent and MCP server.
+

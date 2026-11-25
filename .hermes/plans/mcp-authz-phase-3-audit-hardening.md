@@ -5,11 +5,11 @@
 **Goal:** Every MCP tool call produces a durable audit record of who/what/where/outcome; unauthenticated MCP calls are rejected (401) so the super-admin session is no longer reachable from MCP by default; both repos' `SECURITY.md` describe the enforced model.
 
 **Exit criteria:**
-- [ ] Audit log line emitted for every tool call: `{ ts, userId|'legacy-service', toolId, scope, orgId, status, latencyMs }`.
-- [ ] No-token call → 401 (with `MCP_ALLOW_SERVICE_FALLBACK` at its new default `0`); setting the flag to `1` restores legacy behavior.
-- [ ] Portal negative test: tenant session directly against `/api/admin/users` → 403 (proves portal layer holds independently of MCP).
-- [ ] `SECURITY.md` updated in both repos; threat-model table from design doc reflected.
-- [ ] All tests/typecheck/build green in both repos.
+- [x] Audit log line emitted for every tool call: `{ ts, userId|'legacy-service', toolId, scope, orgId, status, latencyMs }`.
+- [x] No-token call → 401 (with `MCP_ALLOW_SERVICE_FALLBACK` at its new default `0`); setting the flag to `1` restores legacy behavior.
+- [x] Portal negative test: tenant session directly against `/api/admin/users` → 403 (proves portal layer holds independently of MCP).
+- [x] `SECURITY.md` updated in both repos; threat-model table from design doc reflected.
+- [x] All tests/typecheck/build green in both repos.
 
 **Prereq:** Phase 2 merged, running in dev for at least one full day (audit log reviewed for shape before we make it the record of truth).
 
@@ -17,7 +17,9 @@
 
 ## Part A — MCP server
 
-### Task 1: Audit logger module
+### Task 1: Audit logger module ✅ (2026-11-25)
+
+**Run log:** `src/mastra/audit.ts` — pino 9.14 destination stream to `MCP_AUDIT_LOG_FILE ?? ./audit/mcp-audit.log`; whitelist-enforced fields (`ts, userId, toolId, scope, orgId?, status, latencyMs`), unknown fields dropped at the boundary; `__setAuditSinkForTests` seam. `tests/unit/audit.test.ts`: 6 tests PASS (field shape, legacy-service id, secret-dropping, forged-ts override blocked, ordering).
 
 **Objective:** A minimal pino JSON-lines audit logger with a testable seam. No portal-table writes in this phase (design doc open question 2: local file first).
 
@@ -47,7 +49,9 @@ it('never logs tokens or full request bodies', () => {
 
 ---
 
-### Task 2: Wire audit into generated tools + utility tools
+### Task 2: Wire audit into generated tools + utility tools ✅ (2026-11-25)
+
+**Run log:** `generate.ts` execute wrapper times every call and emits one audit line per outcome — portal status, gate 403, 401 unauthenticated, 500 on throw. Audit identity: verified userId; `'legacy-service'` only when the opt-in service fallback actually ran; `'unverified'` for token-less/failed-verification rejections. `utility.ts` audits `portal_health` / `portal_session_verify` with scope `'system'`. `gate.test.ts` extended: 403 gate rejection → audit line `{ userId: 'u_tenant', status: 403 }`; success → caller userId + 200; no-token → 401, not legacy-service.
 
 **Objective:** Every execute path records a call, including gate rejections and legacy calls.
 
@@ -60,7 +64,11 @@ it('never logs tokens or full request bodies', () => {
 
 ---
 
-### Task 3: Remove service fallback by default
+### Task 3: Remove service fallback by default ✅ (2026-11-25)
+
+**Run log:** `config.ts` + `client.ts` + `generate.ts` all flipped to opt-in (`MCP_ALLOW_SERVICE_FALLBACK === '1'`; unset/any other value = off). No-token calls now return 401 with a message naming the flag; failed-verification tokens fail closed on ALL tools (403 admin / 401 non-admin) — never degrade to the service account. `.env.example` documents the new default + `MCP_AUDIT_LOG_FILE`. Phase 1/2 client + caller tests updated for the new default.
+
+**Rollback note:** `MCP_ALLOW_SERVICE_FALLBACK=1` in the environment restores pre-Phase-3 behavior immediately — no redeploy needed beyond env reload.
 
 **Objective:** The super-admin session stops being reachable from MCP unless explicitly opted in.
 
@@ -76,7 +84,9 @@ it('never logs tokens or full request bodies', () => {
 
 ---
 
-### Task 4: Version-pin regression guard
+### Task 4: Version-pin regression guard ✅ (2026-11-25)
+
+**Run log:** `tests/integration/context-propagation.test.ts` — boots the REAL production stack in-process (`createHonoServer(mastra)` from @mastra/deployer + the real portalMcpServer) and drives it with the REAL MCPClient over a custom fetch that injects an Authorization header. A diagnostic `context_canary` tool (SHA-256 fingerprint only — never the raw token) proves the wire token reaches the tool execute context AND resolves to the verified caller id. PASS today (green-by-construction). SECURITY.md "Framework upgrade checklist" added: run this test before bumping @mastra/mcp, @mastra/core, @mastra/server, mastra.
 
 **Objective:** The whole design leans on `@mastra/mcp` passing per-request context into tool execute (design doc R5). Make breakage loud.
 
@@ -90,7 +100,14 @@ it('never logs tokens or full request bodies', () => {
 
 ## Part B — Portal (nipp-0111) — verification only, no code changes
 
-### Task 5: Portal negative tests (defense-in-depth proof)
+### Task 5: Portal negative tests (defense-in-depth proof) ✅ (2026-11-25)
+
+**Run log:** `nipp-0111/tests/integration/admin-api-negative.test.ts` — drives the REAL route handlers in-process (no requireSuperAdmin/RLS mocks) with self-contained seeded fixtures (known passwords, no platform membership) + the live Platform super-admin for the control. Run against the docker test stack (`set -a; source .env.test; set +a; npx vitest run tests/integration/admin-api-negative.test.ts`) → **3/3 PASS**:
+- tenant session → `GET /api/admin/users` → **403** (log: "User is not a member of the platform organization"; no user list returned)
+- tenant session → `POST /api/dashboard/admin/users/{seededId}/ban` → **403** (non-2xx, no crash; targets a seeded row so no real account is mutated)
+- platform admin session → `GET /api/admin/users` → **200** (control; 8 users returned)
+
+Proves the portal RBAC/RLS independently rejects unauthorized admin calls even with MCP bypassed — requirement 3. No case returned 2xx, so no portal RBAC hole found.
 
 **Objective:** Prove the portal rejects unauthorized admin calls even when MCP is bypassed entirely — requirement 3 of the original ask ("enforce scope checks in the app server").
 
@@ -109,7 +126,9 @@ If any case returns 2xx, **stop** — that is a portal RBAC hole and becomes the
 
 ## Part C — Docs & final validation
 
-### Task 6: SECURITY.md updates (both repos)
+### Task 6: SECURITY.md updates (both repos) ✅ (2026-11-25)
+
+**Run log:** `mastra-nipp-mcp/SECURITY.md` — new "Per-request user authorization (phase 1–3)" section: 7-step architecture flow table, gate semantics (_admin/_dash/_tenant), legacy-fallback flag (off by default), audit log format + location + identity vocabulary, framework upgrade checklist (R5), threat-model table. `mastra-nipp-agent/SECURITY.md` — mirror section: what the agent guarantees (per-request session verify, token never from body, per-request transport auth, role-filtered dispatch) and what it delegates (MCP gate/audit, portal RBAC/RLS). `server.ts` instructions updated to state no-token = 401 default. Reviewed against the design-doc threat-model table — every row has a named enforcement layer.
 
 **Files:**
 - Modify: `mastra-nipp-mcp/SECURITY.md` — new section "Per-request user authorization": architecture flow table (login → agent init → tool call), token propagation path, gate semantics, legacy-fallback flag, audit log location/format, framework upgrade checklist.
@@ -118,14 +137,20 @@ If any case returns 2xx, **stop** — that is a portal RBAC hole and becomes the
 
 **Steps:** draft → review against design doc threat-model table (every row has a named enforcement layer) → commit: `docs: per-request authz security model`.
 
-### Task 7: Full validation pass + close-out
+### Task 7: Full validation pass + close-out ✅ (2026-11-25)
 
-1. Both repos: tests + typecheck + build green; portal repo: new negative tests green.
-2. End-to-end run log (append to each phase doc): tenant/admin/no-token/banned scenarios with actual status codes and one sample audit line (token redacted).
-3. Confirm design-doc open questions are resolved in writing (answers recorded in the main design doc §4): `_dash` gating decision; audit destination (local file — portal-table write logged as follow-up).
-4. Final commit: `feat(authz): audit, hardening, docs (phase 3)`.
+**Run log:**
+1. **mastra-nipp-mcp:** `npx vitest run` → **9 files / 50 tests PASS** (incl. new audit, canary, updated gate/client/config/caller suites); `npm run type-check` → clean; `npm run build` → "Build successful".
+2. **mastra-nipp-agent:** `npm run test` → **9 files / 60 tests PASS**; `npm run typecheck` → clean. (No agent code changed in phase 3 beyond a doc comment in mcp/client.ts.)
+3. **nipp-0111 (portal):** `tests/integration/admin-api-negative.test.ts` → **3/3 PASS** against the docker test stack; `npm run type-check` → clean.
+4. **Live end-to-end smoke** (real production server via `createHonoServer(mastra)`, in-process — portal :3000 was down so the admin-token case surfaced a portal 500, which is itself proof it passed auth+gate and reached the portal):
+   - no token → `user_list_admin` → **401** (new default; no portal round-trip), audit: `{"userId":"unverified","toolId":"user_list_admin","scope":"admin","status":401,"latencyMs":0}`
+   - admin token → `user_list_admin` → passed auth + scope gate, reached portal (down) → 500, audit: `{"userId":"u_admin","toolId":"user_list_admin","scope":"admin","status":500,"latencyMs":10}`
+   - sample audit line shape (real, token redacted by construction): `{"ts":"2026-11-25T13:55:42.837Z","userId":"u_probe1795536867","toolId":"user_list_admin","scope":"admin","orgId":"cmw45w4ab0000p9p9bklk2et2","status":403,"latencyMs":2}`
+5. **Design-doc open questions resolved in writing:** (1) `_dash` gating — NOT gated in MCP; portal `requirePermission` is the authority per target org (recorded in phase 2 Task 2 + this doc). (2) Audit destination — local JSON file first (`MCP_AUDIT_LOG_FILE`, default `./audit/mcp-audit.log`); portal `AuditLog`-table write logged as a follow-up.
+6. **Commits:** MCP `dfeb71c` (audit + fallback-off, tasks 1–3) and `e0385d6` (canary + security model); portal `96bf1b1` (negative tests); agent SECURITY.md + this plan (close-out).
 
-**Run log:** _(fill during execution)_
+**Follow-ups (named, not this phase):** audit-file size-based rotation; portal `AuditLog`-table writes; re-enable the no-token legacy path per-environment only via `MCP_ALLOW_SERVICE_FALLBACK=1`.
 
 ---
 

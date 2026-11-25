@@ -13,8 +13,9 @@ import { loadConfig } from '../config';
  * token — the MCP server verifies it and forwards it to the portal under that
  * user's session instead of its own service account.
  *
- * No token (empty/absent) → no Authorization header: the MCP server's legacy
- * service-account fallback handles it (phase 3 removes that path).
+ * No token (empty/absent) → no Authorization header: the MCP server rejects
+ * such calls with 401 by default (phase 3; its legacy service-account
+ * fallback is opt-in only).
  */
 export function portalMcpFetch(inner: typeof fetch): MastraFetchLike {
   return async (url, init, requestContext) => {

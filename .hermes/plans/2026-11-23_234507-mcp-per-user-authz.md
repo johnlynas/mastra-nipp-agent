@@ -137,9 +137,9 @@ Details, code, and test steps live in the phase docs.
 | **R6.** Platform-org membership lookup needs RLS-correct context (portal uses `withPlatformRead`). | MCP/agent are external to the portal's GUC machinery — they query as the non-owner `nipp_app` role with an explicit `organizationId = PLATFORM_ORG_ID` filter on `Member`, which is what makes the row visible under RLS. Phase 1 Task 2 verifies against live DB state (a known platform admin resolves `isPlatformAdmin: true`). |
 | **R7.** Token cache staleness after ban/unban (≤60s window). | Acceptable: portal RBAC re-checks on every call, so a banned user is blocked at the portal within one request; document the bound. |
 
-**Open questions (answer before Phase 2):**
-1. Should `_dash` (dashboard-admin) tools require platform admin, or "org admin of target org"? Today's portal treats both under `verifySuperAdmin` for `/api/admin/*`; dashboard-admin routes use `requirePermission`. **Proposed:** gate `_admin` on platform admin; gate `_dash` on the caller being a member of the *target* org with the matching permission (checked via portal response, i.e., no new MCP logic — let the portal 403). Confirm.
-2. Audit log destination: local JSON file (pino-pretty off) vs. portal `AuditLog` table. **Proposed:** local file first (no portal changes); portal-table write is a follow-up.
+**Open questions (RESOLVED 2026-11-25, phase 3 close-out):**
+1. `_dash` gating — **Resolved:** NOT gated in the MCP server. `_admin` (`/api/admin/*`) is gated on platform-admin membership; `_dash` (`/api/dashboard/admin/*`) is left to the portal's `requirePermission`, which enforces org-admin rights per *target* org and returns its own 403. No new MCP logic — the portal stays the authority for dashboard-admin scope (recorded in phase 2 Task 2 + phase 3 SECURITY.md).
+2. Audit log destination — **Resolved:** local JSON file first (`MCP_AUDIT_LOG_FILE`, default `./audit/mcp-audit.log`); no portal changes this phase. Portal `AuditLog`-table write is a named follow-up (revisit after one week of local-file review). Size-based rotation also a named follow-up.
 
 ---
 
