@@ -52,6 +52,7 @@
   },
   "overrides": {
     "@hono/node-server": "^2.1.8",
+    "effect": "^3.22.5",
     "readdir-glob": {
       "minimatch": "^11.0.1"
     }
