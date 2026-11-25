@@ -36,6 +36,42 @@ export interface PortalSessionUser {
    * calling user's own portal session, not the MCP server's service account.
    */
   sessionToken?: string;
+  /**
+   * Phase 2: true only when the caller is a member of the Platform org
+   * (same definition as the portal's verifySuperAdmin / the MCP server's
+   * verifyCaller). /api/chat puts it in requestContext as
+   * `mastra__callerIsAdmin`; dispatch refuses admin-scoped MCP tools for
+   * non-admins (defense-in-depth — the MCP scope gate is authoritative).
+   */
+  isPlatformAdmin: boolean;
+}
+
+/**
+ * Platform org id from env. The .env value may carry quotes / an inline
+ * comment (dotenv keeps both in the parsed string) — normalize to the bare id.
+ */
+function platformOrgId(): string {
+  return (process.env.PLATFORM_ORG_ID ?? '').replace(/^[\"']|[\"'\s#].*$/g, '').trim();
+}
+
+/**
+ * Phase 2: is this user a member of the Platform org? Mirrors the MCP server's
+ * verifyCaller exactly (Member row for PLATFORM_ORG_ID). Fail-closed: any DB
+ * error → false. When PLATFORM_ORG_ID is unset (misconfigured env), everyone is
+ * non-admin — the MCP gate + portal RBAC still enforce the real boundary.
+ */
+async function isPlatformAdminUser(userId: string): Promise<boolean> {
+  const pOrg = platformOrgId();
+  if (!pOrg) return false;
+  try {
+    const member = await agentPrisma.member.findFirst({
+      where: { userId, organizationId: pOrg },
+      select: { id: true },
+    });
+    return !!member;
+  } catch {
+    return false;
+  }
 }
 
 /** Read a single cookie value from a raw `Cookie:` header (null if absent). */
@@ -116,5 +152,6 @@ export async function getPortalSessionUser(
     return null; // fail closed, same as authorizeUser
   }
 
-  return { id: user.id, name: user.name, email: user.email, sessionToken: sessionToken || undefined };
+  const isPlatformAdmin = await isPlatformAdminUser(user.id);
+  return { id: user.id, name: user.name, email: user.email, sessionToken: sessionToken || undefined, isPlatformAdmin };
 }

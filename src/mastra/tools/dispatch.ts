@@ -1,6 +1,7 @@
 import { portalMcp } from '../mcp/client';
 import { agentPrisma } from '../auth';
 import { loadConfig } from '../config';
+import { isAdminToolId } from './admin-tools';
 
 /**
  * Shared MCP dispatcher (DESIGN §3.3, Phase 5 step 1).
@@ -174,6 +175,17 @@ export async function callMcpTool(
   opts: { requestContext?: RequestContextLike } = {},
 ): Promise<DispatchResult> {
   const nsId = `${SERVER}_${toolId}`;
+
+  // Phase 2 task 5 (agent-side defense-in-depth): when the chat route has
+  // verified the caller is NOT a platform admin, refuse admin-scoped tool ids
+  // before they reach the MCP transport. The MCP server's scope gate remains
+  // the authoritative boundary — this just gives the model a clean refusal and
+  // avoids a guaranteed-403 round-trip. `undefined` (non-chat callers / legacy)
+  // is NOT blocked: only an explicit `false` is.
+  const callerIsAdmin = opts.requestContext?.get?.('mastra__callerIsAdmin');
+  if (callerIsAdmin === false && isAdminToolId(toolId)) {
+    return { success: false, status: 403, error: 'This action requires administrator access.' };
+  }
 
   let registry = await loadRegistry();
   let entry = registry.map.get(nsId);

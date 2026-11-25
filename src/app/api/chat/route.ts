@@ -50,8 +50,13 @@ export async function POST(req: Request) {
   // Phase 1 MCP authz: the caller's portal session token rides along in the
   // tool call context; the MCP transport fetch hook (src/mastra/mcp/client.ts)
   // injects it as Authorization on every request to the MCP server, which then
-  // forwards it to the portal under THIS user's session.
+  // forwards it to the portal under THIS user's own session.
   requestContext.set('mastra__portalSessionToken', user.sessionToken ?? '');
+  // Phase 2: the caller's platform-admin flag. dispatch refuses admin-scoped
+  // MCP tool ids for non-admins (defense-in-depth; the MCP scope gate is the
+  // authoritative boundary). Fail-closed upstream: getPortalSessionUser only
+  // returns a user when the session + ban check passed.
+  requestContext.set('mastra__callerIsAdmin', user.isPlatformAdmin);
 
   const stream = await handleChatStream({
     mastra,
