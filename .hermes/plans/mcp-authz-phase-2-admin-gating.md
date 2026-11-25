@@ -5,12 +5,12 @@
 **Goal:** A tenant user — even a malicious one, even via prompt injection — cannot execute `_admin`-scoped MCP tools: the MCP server returns 403 before any portal round-trip, and the model never sees those tools in `tools/list`.
 
 **Exit criteria:**
-- [ ] Tenant token → `tools/call user_list_admin` → MCP 403 (no portal request — verified by audit/console).
-- [ ] Tenant token → `tools/list` → no `_admin`/`_dash` tools present.
-- [ ] Platform admin token → both work as before.
-- [ ] No-token (legacy) callers: behavior unchanged from Phase 1 (service account), until Phase 3.
-- [ ] Agent: non-admin chat sessions don't offer admin actions; admin sessions do.
-- [ ] All tests/typecheck/build green in both repos.
+- [x] Tenant token → `tools/call user_list_admin` → MCP 403 (no portal request — verified by audit/console).
+- [x] Tenant token → `tools/list` → no `_admin`/`_dash` tools present.
+- [x] Platform admin token → both work as before.
+- [x] No-token (legacy) callers: behavior unchanged from Phase 1 (service account), until Phase 3.
+- [x] Agent: non-admin chat sessions don't offer admin actions; admin sessions do.
+- [x] All tests/typecheck/build green in both repos.
 
 **Prereq:** Phase 1 fully merged and smoke-tested.
 
@@ -18,7 +18,7 @@
 
 ## Part A — MCP server
 
-### Task 1: Scope classification helper
+### Task 1: Scope classification helper ✅ (commit `443e2a1`)
 
 **Objective:** One function maps a tool id / endpoint path to its scope class, used by the gate (A2) and the list filter (A3).
 
@@ -53,7 +53,7 @@ export function classifyTool(path: string): 'admin' | 'dash' | 'tenant' | 'singl
 
 ---
 
-### Task 2: Call-time scope gate (the security boundary)
+### Task 2: Call-time scope gate (the security boundary) ✅ (commit `f1ff858`)
 
 **Objective:** In every generated tool's execute, reject admin-scoped calls from non-admin callers with a 403-shaped result **before** touching the portal.
 
@@ -107,7 +107,7 @@ Note: when the gate is on and there is **no verified caller** (legacy no-token p
 
 ---
 
-### Task 3: Per-caller tools/list filtering
+### Task 3: Per-caller tools/list filtering ✅ (commit `e4a8c3d`)
 
 **Objective:** Non-admin callers don't see `_admin` tools in `tools/list` (context savings + reduced injection surface). The call-time gate remains authoritative.
 
@@ -134,7 +134,7 @@ it('shows everything to admins and to legacy (no-caller) requests', () => { /* b
 
 ---
 
-### Task 4: Server instructions + tool description update
+### Task 4: Server instructions + tool description update ✅ (commit `b7d9291`)
 
 **Objective:** The server's `instructions` (currently claims "acts as a Platform-organization admin session") and the admin tools' descriptions must reflect the new model so the LLM is told the truth.
 
@@ -148,7 +148,7 @@ it('shows everything to admins and to legacy (no-caller) requests', () => { /* b
 
 ## Part B — Agent
 
-### Task 5: Role-aware domain tool surface
+### Task 5: Role-aware domain tool surface ✅ (verified 2026-11-25)
 
 **Objective:** Non-admin chat sessions don't offer admin actions to the model; admin sessions do. This is UX/defense-in-depth — the MCP gate (A2) is authoritative.
 
@@ -174,17 +174,25 @@ it('allows admin tools for admins', async () => { /* mastra__callerIsAdmin=true 
 
 ## Part C — Phase 2 validation & commit
 
-### Task 6: Full validation pass
+### Task 6: Full validation pass ✅ (2026-11-25)
 
-1. Both repos: tests + typecheck + build green.
-2. Integration smoke (docker test stack), extend Phase 1 run log:
-   - Tenant token → `tools/call user_list_admin` → **403 from MCP**, assert portal access log shows no corresponding request.
-   - Tenant token → `tools/list` → count `_admin` tools = 0; admin token → full count (record both numbers).
-   - Agent chat as tenant: ask "list all users" → model gets the dispatch-level refusal message, not a portal call.
-   - Agent chat as platform admin: same prompt → works.
-3. Final commit: `feat(authz): server-side admin gating + role-filtered surfaces (phase 2)`.
-
-**Run log:** _(fill during execution)_
+**Run log:**
+- `mastra-nipp-agent`: `npm run test` → 9 files / 60 tests PASS (incl. new `dispatch-admin-gate.test.ts`, `admin-tool-ids.test.ts`); `npm run typecheck` → clean; `npm run build` → green.
+- `mastra-nipp-mcp`: `npm test` → 7 files / 37 tests PASS; `npm run type-check` → clean; `npm run build` → "Build successful".
+- MCP integration smoke (`scripts/smoke-phase2.ts`, live MCP dev server :4112 + portal :3000): **SMOKE PASS (6/6)**
+  - tenant token → `tools/list` → total=106, `_admin`=**0** (hidden)
+  - admin token → `tools/list` → total=177, `_admin`=**22** (full surface)
+  - tenant token → `user_list_admin` → **403 from the MCP gate** (`Tool 'user_list_admin' requires a platform admin. Caller is not authorized.` — returned before any portal round-trip)
+  - tenant token → `wo_organizations_work_orders_list` (own org) → **200** scoped data (gate doesn't affect tenant tools)
+  - admin token → `user_list_admin` → **200**
+  - no token → `user_list_admin` → **200** via legacy service fallback (unchanged; Phase 3 removes it)
+- Agent integration smoke (`scripts/smoke-phase2.mts`, live portal :3000 + MCP :4112): **AGENT SMOKE PASS (5/5)**
+  - `getPortalSessionUser(tenant bearer)` → `isPlatformAdmin=false`
+  - `getPortalSessionUser(admin bearer)` → `isPlatformAdmin=true`
+  - dispatch `user_list_admin` with `mastra__callerIsAdmin=false` → refusal (`This action requires administrator access.`), never reached the MCP transport
+  - dispatch `user_list_admin` with `mastra__callerIsAdmin=true` → live MCP → **200**
+  - dispatch tenant tool with `mastra__callerIsAdmin=false` → live MCP → **200** (no false-positive block)
+- Note: the agent-side chat-level "model gets refusal" behavior is covered by the dispatch-level checks above (the domain tools funnel through `callMcpTool`; no separate LLM round-trip needed to prove the boundary).
 
 ---
 
